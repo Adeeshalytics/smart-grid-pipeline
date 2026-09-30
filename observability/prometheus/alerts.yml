@@ -1,0 +1,117 @@
+# Alert rules, grouped by pipeline stage. Durations are wall-clock; remember that
+# 5 wall-clock minutes are one simulated day.
+groups:
+  - name: ingestion
+    rules:
+      - alert: NoMeterDataReceived
+        # The health check asked for by the brief: "no data received in N minutes".
+        expr: sum(rate(speed_input_rows_total{query="zone_load"}[30s])) == 0 or absent(speed_input_rows_total{query="zone_load"})
+        for: 30s
+        labels: {severity: critical, stage: ingestion}
+        annotations:
+          summary: "No meter readings have reached the speed layer for the last minute"
+          description: "Check the meter simulator, the Kafka broker and the meter.readings topic."
+
+      - alert: MeterSimulatorDown
+        expr: up{job="meter-simulator"} == 0
+        for: 30s
+        labels: {severity: critical, stage: ingestion}
+        annotations:
+          summary: "The streaming source (meter simulator) is not reachable"
+
+      - alert: KafkaDeliveryFailures
+        expr: increase(sim_delivery_failures_total[2m]) > 0
+        labels: {severity: warning, stage: ingestion}
+        annotations:
+          summary: "The producer could not deliver {{ $value | printf \"%.0f\" }} events to Kafka"
+
+      - alert: HighRejectRate
+        # Error-rate rule: share of events routed to the dead-letter topic.
+        expr: sum(rate(speed_rejected_events_total[2m])) / sum(rate(speed_input_rows_total{query="dlq"}[2m])) > 0.05
+        for: 1m
+        labels: {severity: warning, stage: ingestion}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of meter events are being rejected"
+          description: "Inspect the meter.readings.dlq topic; reject reasons are in speed_rejected_events_total."
+
+      - alert: TariffFileMissing
+        expr: time() - batch_last_drop_unix_seconds > 450 or absent(batch_last_drop_unix_seconds)
+        for: 5m
+        labels: {severity: warning, stage: ingestion}
+        annotations:
+          summary: "No tariff file has been delivered for more than 1.5 simulated days"
+
+  - name: processing
+    rules:
+      - alert: SpeedLayerDown
+        expr: up{job="speed-layer"} == 0
+        for: 1m
+        labels: {severity: critical, stage: processing}
+        annotations:
+          summary: "The Spark Structured Streaming driver is not reachable"
+
+      - alert: StreamingQueryStalled
+        expr: time() - speed_last_progress_unix_seconds > 60
+        for: 30s
+        labels: {severity: critical, stage: processing}
+        annotations:
+          summary: "Streaming query {{ $labels.query }} has made no progress for over a minute"
+
+      - alert: KafkaConsumerLagHigh
+        expr: speed_kafka_offsets_behind_latest > 5000
+        for: 1m
+        labels: {severity: warning, stage: processing}
+        annotations:
+          summary: "Query {{ $labels.query }} is {{ $value | printf \"%.0f\" }} offsets behind the topic"
+
+      - alert: SinkWriteErrors
+        expr: increase(speed_sink_errors_total[2m]) > 0
+        labels: {severity: warning, stage: storage}
+        annotations:
+          summary: "Writes to {{ $labels.sink }} are failing"
+
+      - alert: BatchTaskFailed
+        expr: grid_batch_failed_tasks_recent > 0
+        labels: {severity: critical, stage: processing}
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} batch-layer task(s) failed in the last 15 minutes"
+          description: "See the pipeline_runs table and the Airflow task log."
+
+  - name: serving
+    rules:
+      - alert: ServingStoreDown
+        expr: grid_serving_store_up == 0 or up{job="api"} == 0
+        for: 30s
+        labels: {severity: critical, stage: serving}
+        annotations:
+          summary: "The serving API or its PostgreSQL store is unavailable"
+
+      - alert: RealtimeViewStale
+        expr: grid_realtime_view_age_seconds > 45
+        for: 15s
+        labels: {severity: critical, stage: serving}
+        annotations:
+          summary: "The real-time view has not been updated for {{ $value | humanizeDuration }}"
+
+      - alert: DailyReportStale
+        expr: grid_daily_report_age_seconds > 900
+        for: 1m
+        labels: {severity: critical, stage: serving}
+        annotations:
+          summary: "No daily billing report has been published for 3 simulated days"
+
+      - alert: SpeedBatchReconciliationDrift
+        expr: grid_reconciliation_max_abs_diff_pct > 5
+        labels: {severity: warning, stage: serving}
+        annotations:
+          summary: "Real-time and batch totals differ by {{ $value | printf \"%.1f\" }}% for the latest day"
+          description: "More readings than expected are arriving after the watermark."
+
+  - name: business
+    rules:
+      - alert: LowRenewableContribution
+        # Mirrors the domain alert raised by the speed layer (grid_alerts table, grid.alerts topic).
+        expr: grid_business_alerts_recent > 0
+        labels: {severity: info, stage: business}
+        annotations:
+          summary: "Renewable contribution is considerably low in at least one zone"

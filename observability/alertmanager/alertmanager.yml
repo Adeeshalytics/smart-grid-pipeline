@@ -1,0 +1,15 @@
+# Alertmanager groups and de-duplicates alerts, then forwards them to the API,
+# which stores them in ops_alerts and logs them. In production the receiver
+# would be a pager, e-mail or chat integration.
+route:
+  receiver: grid-api
+  group_by: [alertname, stage]
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 1h
+
+receivers:
+  - name: grid-api
+    webhook_configs:
+      - url: http://api:8000/internal/alertmanager
+        send_resolved: true

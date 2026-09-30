@@ -1,0 +1,14 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the Compose file
+        run: docker compose config -q
+      - name: Build the Spark image
+        run: docker compose build speed-layer
+      - name: Unit and Spark tests
+        run: docker compose run --rm --no-deps --entrypoint "" speed-layer python -m pytest -q

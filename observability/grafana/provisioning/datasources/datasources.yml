@@ -1,0 +1,24 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 5s
+
+  - name: GridDB
+    uid: griddb
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: postgres:5432
+    user: $GRID_DB_USER
+    secureJsonData:
+      password: $GRID_DB_PASSWORD
+    jsonData:
+      database: grid
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false

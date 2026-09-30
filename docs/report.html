@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Smart Grid Energy Monitoring &amp; Billing - EC8203 Mini Project Report</title>
+<style>
+  @page { size: A4; margin: 17mm 16mm 17mm 16mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Calibri, Arial, sans-serif; font-size: 10.4pt; line-height: 1.42; color: #1b2430; margin: 0; }
+  h1 { font-size: 21pt; margin: 0 0 4pt; color: #0f3557; }
+  h2 { font-size: 14pt; color: #0f3557; border-bottom: 1.5pt solid #0f3557; padding-bottom: 2pt; margin: 16pt 0 7pt; break-after: avoid; }
+  h3 { font-size: 11.2pt; color: #163f66; margin: 11pt 0 4pt; break-after: avoid; }
+  p { margin: 0 0 6.5pt; text-align: justify; }
+  ul, ol { margin: 0 0 6.5pt; padding-left: 16pt; }
+  li { margin-bottom: 2.5pt; }
+  code { font-family: Consolas, monospace; font-size: 9.2pt; background: #eef2f6; padding: 0 2pt; border-radius: 2pt; }
+  pre { font-family: Consolas, monospace; font-size: 8.2pt; line-height: 1.3; background: #f3f6f9; border: 0.5pt solid #cfd8e1; border-radius: 3pt; padding: 6pt 8pt; margin: 0 0 7pt; white-space: pre-wrap; word-break: break-word; break-inside: avoid; }
+  table { border-collapse: collapse; width: 100%; margin: 3pt 0 8pt; font-size: 9.1pt; }
+  tr { break-inside: avoid; }
+  th, td { border: 0.5pt solid #b9c5d1; padding: 3pt 5pt; vertical-align: top; text-align: left; }
+  th { background: #e4ecf4; color: #0f3557; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .cover { height: 245mm; display: flex; flex-direction: column; justify-content: center; break-after: page; }
+  .cover .tag { font-size: 11pt; color: #4a6076; letter-spacing: 0.6pt; text-transform: uppercase; }
+  .cover h1 { font-size: 28pt; margin: 8pt 0; }
+  .cover .sub { font-size: 13pt; color: #2c4a66; margin-bottom: 22pt; }
+  .cover table { width: 78%; font-size: 10.5pt; }
+  .cover .abstract { margin-top: 20pt; width: 92%; border-left: 3pt solid #0f3557; padding-left: 10pt; color: #2b3947; }
+  .fig { margin: 5pt 0 9pt; break-inside: avoid; text-align: center; }
+  .fig img { max-width: 100%; border: 0.5pt solid #b9c5d1; }
+  .fig .crop { overflow: hidden; border: 0.5pt solid #b9c5d1; }
+  .fig .crop img { border: 0; display: block; }
+  .cap { font-size: 8.8pt; color: #44566a; margin-top: 3pt; text-align: center; }
+  .box { border: 0.75pt solid #0f3557; background: #f2f7fb; border-radius: 3pt; padding: 6pt 9pt; margin: 5pt 0 9pt; break-inside: avoid; }
+  .box p:last-child { margin-bottom: 0; }
+  .two { display: flex; gap: 9pt; } .two > div { flex: 1; }
+  .pb { break-before: page; }
+  svg text { font-family: "Segoe UI", Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="tag">EC8203 Applied Big Data Engineering &middot; Mini Project 2026</div>
+  <h1>Smart Grid Energy Monitoring &amp; Billing</h1>
+  <div class="sub">An end-to-end Lambda architecture data platform (Use Case 3)</div>
+  <table>
+    <tr><th style="width:36%">Group members</th><td>[Name 1 - index no.], [Name 2 - index no.], [Name 3 - index no.]</td></tr>
+    <tr><th>Architecture</th><td>Lambda (speed layer + batch layer + serving layer)</td></tr>
+    <tr><th>Stack</th><td>Kafka, Spark Structured Streaming, Spark batch, Airflow, Parquet on an S3-compatible object store, PostgreSQL, FastAPI, Prometheus, Alertmanager, Grafana</td></tr>
+    <tr><th>Simulated clock</th><td>1 simulated day = 5 minutes of wall-clock time (288&times; speed-up)</td></tr>
+    <tr><th>Repository</th><td>[link to the Git repository]</td></tr>
+  </table>
+  <div class="abstract">
+    <p>A utility needs two answers from the same meter data. The control room asks
+    <i>what is the grid load and the solar contribution in each zone right now?</i> The billing
+    department asks <i>what does each household owe for yesterday, once yesterday's tariff file is
+    applied?</i> The first needs an answer in seconds and tolerates a small error. The second can
+    wait a few minutes but must be exact, auditable and re-computable.</p>
+    <p>This report describes a platform that answers both. It ingests a continuous meter stream and a
+    once-a-day tariff file, processes them in a speed layer and a batch layer that share one set of
+    transformations, serves a merged view through an API and dashboards, and measures its own health
+    and its own accuracy. Over the 6 simulated days reported here it processed
+    75,770 meter events, and the batch layer corrected the real-time totals by
+    0.16% to 0.59% per zone.</p>
+  </div>
+</div>
+
+<h2>1. Use case and business requirements</h2>
+<p>We chose <b>Use Case 3, Smart Grid Energy Monitoring &amp; Billing</b>. A utility company wants
+real-time visibility into grid load and renewable (solar) contribution from smart meters, reconciled
+daily against tariff and billing data that is produced once a day.</p>
+<p><b>Business question.</b> What is the current grid load and renewable contribution by zone, and
+what will each household's bill look like once the daily tariff data is applied to its consumption?</p>
+<p>We read that question as two questions with different service levels, and that reading drives
+every design decision that follows.</p>
+<table>
+  <tr><th style="width:5%">#</th><th style="width:26%">Requirement</th><th>What it demands from the platform</th><th style="width:21%">Where it is met</th></tr>
+  <tr><td>R1</td><td>Live grid load and renewable mix by zone</td><td>Latency of seconds. A small, bounded error is acceptable: an operator acts on trends, not on the last decimal.</td><td>Speed layer, <code>/api/v1/grid/realtime</code></td></tr>
+  <tr><td>R2</td><td>Alert when renewable contribution is considerably low</td><td>Evaluated on the stream, per zone, only in daylight hours, without false alarms from half-filled windows.</td><td>Speed layer, <code>grid_alerts</code>, topic <code>grid.alerts</code></td></tr>
+  <tr><td>R3</td><td>Daily bill and solar contribution per household</td><td>Exact. Every reading counted once, including late ones. Reproducible from raw data, and re-computable when a tariff is corrected.</td><td>Batch layer, daily report</td></tr>
+  <tr><td>R4</td><td>Two sources with different rhythms</td><td>A continuous event stream and a file that exists only once per day must be joined.</td><td>Both layers</td></tr>
+  <tr><td>R5</td><td>Observable, not just functional</td><td>Logs, metrics and alerts at every stage; a way to diagnose a failure and to know the data is fresh and correct.</td><td>Section 6</td></tr>
+</table>
+<p><b>Simulated environment.</b> 120 households in five grid zones. Each meter reports consumption and
+solar generation every 15 simulated minutes (about every 3.1 s of wall-clock time), giving about
+38 events per second. Solar penetration differs by zone (20% to 45% of households), and each
+zone-day has its own weather, so roughly one zone-day in four is overcast. One tariff file is
+delivered per simulated day.</p>
+
+<h2>2. Architecture decision: Lambda versus Kappa</h2>
+<h3>2.1 The two candidates</h3>
+<p>A <b>Lambda</b> architecture keeps an immutable master dataset and computes two views from it: a
+<i>batch view</i>, recomputed from all the raw data and therefore exact, and a <i>real-time view</i>,
+computed incrementally from the stream and therefore fast but approximate. A serving layer merges
+them. A <b>Kappa</b> architecture removes the batch layer: everything is a stream, the log is the
+source of truth, and reprocessing means replaying the log through a new version of the streaming job.</p>
+
+<h3>2.2 Decision</h3>
+<div class="box"><p><b>We chose Lambda.</b> R1 and R3 have opposite requirements, and the
+daily tariff file makes billing a batch problem by nature. A bill is money: its correctness must not
+depend on a streaming tuning parameter. Lambda lets each layer be good at one thing, and we accept
+and mitigate its known cost, which is maintaining two processing paths.</p></div>
+
+<h3>2.3 Argument against the use case's constraints</h3>
+<table>
+  <tr><th style="width:13%">Criterion</th><th style="width:43%">Lambda (chosen)</th><th>Kappa (rejected)</th></tr>
+  <tr><td><b>Latency</b></td>
+      <td>Real-time view is updated every 5 s; a closed 15-minute window is visible a few seconds after it ends. The exact daily bill is ready about 83 s after simulated midnight. Both meet their requirement.</td>
+      <td>Equal for R1. For R3 Kappa can emit a running bill continuously, but that bill is not final until the tariff file arrives after midnight, so the extra immediacy has no business value.</td></tr>
+  <tr><td><b>Correctness and late data</b></td>
+      <td>A stream must bound its state with a watermark; whatever arrives later is dropped. Our speed layer uses a 30-minute watermark, and the simulator delays 2.5% of readings by 20 minutes to 3 hours. The batch layer has no watermark: it reads everything that reached the lake and de-duplicates exactly. Measured effect: the speed layer under-counted consumption by 0.16% to 0.59% per zone; the batch layer corrected it.</td>
+      <td>The bill would be produced by the streaming job, so its accuracy would be set by the watermark. A larger watermark reduces the loss but delays every result and enlarges state, and no value makes the loss zero. For a control-room chart that is fine. For invoices it is not.</td></tr>
+  <tr><td><b>Replay and reprocessing</b></td>
+      <td>Reprocessing one day is one idempotent job over one Parquet partition: <code>airflow dags trigger grid_daily_billing --conf '{"sim_date":"2026-01-02"}'</code>. We ran this; it rebuilt the day in 18 s with identical totals. A corrected tariff file is applied the same way.</td>
+      <td>Replay means re-reading the topic from an old offset with a second copy of the job, then cutting over. It needs the whole history retained in Kafka, and it cannot easily target "only 2 January for the households whose tariff changed". Possible, but heavier for the most common correction in billing.</td></tr>
+  <tr><td><b>Fit with the batch source</b></td>
+      <td>The tariff file is a file. The batch layer waits for it with a sensor, validates it as a unit (checksum, row count, reject ratio) and joins it to a closed day of usage.</td>
+      <td>The file would have to be turned into events on a compacted topic and joined with a stream-table temporal join, while usage for a day arrives <i>before</i> its tariff. The job must hold a full day of per-household state or re-emit results. More state, more edge cases, no gain.</td></tr>
+  <tr><td><b>Consistency</b></td>
+      <td>Two views can disagree. We make this explicit instead of hiding it: closed days are served from the batch view, the current day from the real-time view marked <i>provisional</i>, and a reconciliation task measures the gap every day and alerts above 5%.</td>
+      <td>One view, so no disagreement. This is Kappa's real advantage, and we give it up knowingly.</td></tr>
+  <tr><td><b>Cost and complexity</b></td>
+      <td>Two code paths and an orchestrator to operate. Compute cost of the batch layer is small: one job per day, about 21 s here.</td>
+      <td>One code path and no orchestrator for processing. Lower engineering cost. Higher steady-state cost: larger streaming state and long Kafka retention.</td></tr>
+</table>
+
+<h3>2.4 How we reduced Lambda's cost</h3>
+<p>The standard criticism of Lambda is that business logic is written twice and drifts. We addressed
+it directly rather than accepting it.</p>
+<ul>
+  <li><b>One engine.</b> Both layers use Spark, so both use the DataFrame API.</li>
+  <li><b>One set of transformations.</b> <code>src/processing/transforms.py</code> holds validation,
+  de-duplication, zone windows, household daily totals, the tariff join and the billing rules as
+  functions of a DataFrame. The streaming job and the batch job call the same functions; only the
+  source and the sink differ.</li>
+  <li><b>One source of truth for the rules.</b> Limits and billing constants live in plain Python
+  (<code>gridlib</code>); the Spark expressions are built from them, and a test asserts that Spark
+  and the reference implementation produce the same bill row by row.</li>
+  <li><b>The divergence is measured.</b> The <code>reconcile</code> task compares the two views for
+  every day and exports the result as a metric with an alert.</li>
+</ul>
+
+<h3>2.5 Honest trade-offs and when we would choose Kappa</h3>
+<ul>
+  <li>We still operate more moving parts than Kappa needs: Airflow, a batch job and a second set of tables.</li>
+  <li>The real-time and batch views disagree by a fraction of a percent for the current day. A consumer of the API must understand the word "provisional".</li>
+  <li>The batch result lags simulated midnight by the grace period we wait for late readings. A reading later than that is only picked up by a re-run.</li>
+  <li>We would choose Kappa if tariffs were a real-time price signal rather than a daily file, if bills were advisory rather than invoiced, or if the team could not sustain two paths. A lakehouse table format (Iceberg or Delta) with an exactly-once streaming engine would also narrow the gap, because late data could be merged into closed partitions by the stream itself.</li>
+  <li>A pure batch design was also rejected: it cannot meet R1 or R2.</li>
+</ul>
+
+<h2>3. Architecture</h2>
+<div class="fig">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 606" width="100%" font-size="11.5">
+  <defs>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f6fb2"/></marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c8661a"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5b6b7b"/></marker>
+  </defs>
+  <style>
+    text { font-family: "Segoe UI", Arial, sans-serif; }
+    .col { fill: #f4f7fa; stroke: #cfd8e1; }
+    .hd { font-weight: 700; fill: #0f3557; font-size: 12.5px; text-anchor: middle; }
+    .b { fill: #ffffff; stroke: #5b6b7b; stroke-width: 1; rx: 5; }
+    .sp { fill: #e6f1fb; stroke: #1f6fb2; stroke-width: 1.3; }
+    .bt { fill: #fdf0e3; stroke: #c8661a; stroke-width: 1.3; }
+    .st { fill: #eef6ec; stroke: #3d8b40; stroke-width: 1.3; }
+    .ob { fill: #f3effa; stroke: #6a4fb3; stroke-width: 1.3; }
+    .t { font-weight: 700; fill: #1b2430; }
+    .s { fill: #3c4a59; font-size: 10.3px; }
+    .lb { stroke: #1f6fb2; stroke-width: 1.6; fill: none; marker-end: url(#ab); }
+    .lo { stroke: #c8661a; stroke-width: 1.6; fill: none; marker-end: url(#ao); }
+    .lg { stroke: #5b6b7b; stroke-width: 1.2; fill: none; marker-end: url(#ag); stroke-dasharray: 4 3; }
+  </style>
+
+  <!-- column backgrounds -->
+  <rect class="col" x="4" y="4" width="150" height="496" rx="6"/>
+  <rect class="col" x="162" y="4" width="170" height="496" rx="6"/>
+  <rect class="col" x="340" y="4" width="262" height="496" rx="6"/>
+  <rect class="col" x="610" y="4" width="212" height="496" rx="6"/>
+  <rect class="col" x="830" y="4" width="166" height="496" rx="6"/>
+  <text class="hd" x="79" y="23">SOURCES</text>
+  <text class="hd" x="247" y="23">INGESTION</text>
+  <text class="hd" x="471" y="23">PROCESSING</text>
+  <text class="hd" x="716" y="23">STORAGE</text>
+  <text class="hd" x="913" y="23">SERVING</text>
+
+  <!-- sources -->
+  <rect class="b sp" x="12" y="70" width="134" height="92" rx="5"/>
+  <text class="t" x="20" y="88">Meter simulator</text>
+  <text class="s" x="20" y="104">Python, 120 meters</text>
+  <text class="s" x="20" y="118">1 reading / 15 sim-min</text>
+  <text class="s" x="20" y="132">injects corrupt, late</text>
+  <text class="s" x="20" y="146">and duplicate events</text>
+
+  <rect class="b bt" x="12" y="360" width="134" height="92" rx="5"/>
+  <text class="t" x="20" y="378">Tariff dropper</text>
+  <text class="s" x="20" y="394">Python, 1 CSV per</text>
+  <text class="s" x="20" y="408">simulated day</text>
+  <text class="s" x="20" y="422">+ manifest (rows,</text>
+  <text class="s" x="20" y="436">SHA-256)</text>
+
+  <!-- ingestion -->
+  <rect class="b sp" x="170" y="60" width="154" height="112" rx="5"/>
+  <text class="t" x="178" y="78">Apache Kafka</text>
+  <text class="s" x="178" y="94">meter.readings</text>
+  <text class="s" x="178" y="108">6 partitions,</text>
+  <text class="s" x="178" y="122">key = meter_id</text>
+  <text class="s" x="178" y="140">meter.readings.dlq</text>
+  <text class="s" x="178" y="154">grid.alerts</text>
+
+  <rect class="b bt" x="170" y="370" width="154" height="72" rx="5"/>
+  <text class="t" x="178" y="388">Landing zone</text>
+  <text class="s" x="178" y="404">object store (S3 API)</text>
+  <text class="s" x="178" y="418">tariffs/dt=YYYY-MM-DD/</text>
+  <text class="s" x="178" y="432">tariffs.csv, _manifest</text>
+
+  <!-- speed layer -->
+  <rect class="b sp" x="348" y="40" width="246" height="176" rx="5"/>
+  <text class="t" x="356" y="58">SPEED LAYER</text>
+  <text class="s" x="356" y="73">Spark Structured Streaming, 4 queries</text>
+  <text class="s" x="356" y="92">1  validate contract &#8594; rejects to DLQ</text>
+  <text class="s" x="356" y="108">2  archive valid raw events (append)</text>
+  <text class="s" x="356" y="124">3  watermark 30 min + dedup by event_id,</text>
+  <text class="s" x="366" y="138">15-min windows by zone, alert rule</text>
+  <text class="s" x="356" y="154">4  household running totals joined with</text>
+  <text class="s" x="366" y="168">latest tariff &#8594; provisional bill</text>
+  <text class="s" x="356" y="188">checkpoint per query, idempotent sinks</text>
+  <text class="s" x="356" y="204">trigger 5 to 10 s</text>
+
+  <!-- shared transforms -->
+  <rect class="b" x="378" y="232" width="186" height="46" rx="5" style="fill:#fffbe6;stroke:#a88a00"/>
+  <text class="t" x="471" y="250" text-anchor="middle">transforms.py</text>
+  <text class="s" x="471" y="266" text-anchor="middle">one set of logic, used by both layers</text>
+
+  <!-- batch layer -->
+  <rect class="b bt" x="348" y="294" width="246" height="196" rx="5"/>
+  <text class="t" x="356" y="312">BATCH LAYER</text>
+  <text class="s" x="356" y="327">Airflow DAG, one run per simulated day</text>
+  <text class="s" x="356" y="346">1  wait for tariff file (sensor)</text>
+  <text class="s" x="356" y="362">2  verify checksum, validate, load tariffs</text>
+  <text class="s" x="356" y="378">3  wait for late readings (grace period)</text>
+  <text class="s" x="356" y="394">4  Spark batch: exact dedup, household</text>
+  <text class="s" x="366" y="408">totals, join tariffs, billing rules</text>
+  <text class="s" x="356" y="424">5  reconcile speed vs batch</text>
+  <text class="s" x="356" y="440">6  quality gate</text>
+  <text class="s" x="356" y="456">7  publish HTML + CSV report</text>
+  <text class="s" x="356" y="476">idempotent; re-run any day by parameter</text>
+
+  <!-- storage -->
+  <rect class="b st" x="618" y="40" width="196" height="120" rx="5"/>
+  <text class="t" x="626" y="58">PostgreSQL: real-time views</text>
+  <text class="s" x="626" y="76">rt_zone_load</text>
+  <text class="s" x="626" y="92">rt_household_today</text>
+  <text class="s" x="626" y="108">grid_alerts</text>
+  <text class="s" x="626" y="130">upsert on natural key</text>
+  <text class="s" x="626" y="146">(current day, provisional)</text>
+
+  <rect class="b st" x="618" y="176" width="196" height="102" rx="5"/>
+  <text class="t" x="626" y="194">Data lake (Parquet, S3 API)</text>
+  <text class="s" x="626" y="212">raw/meter_readings/</text>
+  <text class="s" x="636" y="226">event_date=...  master dataset</text>
+  <text class="s" x="626" y="244">curated/daily_household_bill/</text>
+  <text class="s" x="626" y="262">reports/daily/  HTML, CSV</text>
+
+  <rect class="b st" x="618" y="294" width="196" height="196" rx="5"/>
+  <text class="t" x="626" y="312">PostgreSQL: batch views</text>
+  <text class="s" x="626" y="330">daily_household_bill</text>
+  <text class="s" x="626" y="346">daily_zone_summary</text>
+  <text class="s" x="626" y="362">reconciliation</text>
+  <text class="s" x="626" y="378">daily_reports</text>
+  <text class="s" x="626" y="400">tariffs, tariff_rejects</text>
+  <text class="s" x="626" y="416">pipeline_runs (audit trail)</text>
+  <text class="s" x="626" y="438">atomic swap per day</text>
+  <text class="s" x="626" y="454">(closed days, exact)</text>
+
+  <!-- serving -->
+  <rect class="b" x="850" y="100" width="140" height="150" rx="5"/>
+  <text class="t" x="858" y="118">FastAPI</text>
+  <text class="s" x="858" y="136">/grid/realtime</text>
+  <text class="s" x="858" y="152">/billing/{day}</text>
+  <text class="s" x="858" y="168">/households/{id}/</text>
+  <text class="s" x="868" y="182">bill-to-date</text>
+  <text class="s" x="858" y="200">merges real-time</text>
+  <text class="s" x="858" y="214">and batch views</text>
+  <text class="s" x="858" y="234">/health  /metrics</text>
+
+  <rect class="b" x="850" y="300" width="140" height="116" rx="5"/>
+  <text class="t" x="858" y="318">Grafana</text>
+  <text class="s" x="858" y="336">Grid Operations</text>
+  <text class="s" x="858" y="352">(business view)</text>
+  <text class="s" x="858" y="372">Pipeline Health</text>
+  <text class="s" x="858" y="388">(observability)</text>
+  <text class="s" x="858" y="406">PostgreSQL + Prometheus</text>
+
+  <!-- arrows: speed path -->
+  <path class="lb" d="M146,116 L170,116"/>
+  <path class="lb" d="M324,116 L348,116"/>
+  <path class="lb" d="M594,96 L618,96"/>
+  <path class="lb" d="M594,190 L606,190 L606,200 L618,200"/>
+  <path class="lb" d="M348,200 L336,200 L336,152 L324,152"/>
+  <path class="lb" d="M814,120 L850,120"/>
+  <!-- arrows: batch path -->
+  <path class="lo" d="M146,406 L170,406"/>
+  <path class="lo" d="M324,406 L348,406"/>
+  <path class="lo" d="M618,232 L606,232 L606,330 L594,330"/>
+  <path class="lo" d="M594,410 L618,410"/>
+  <path class="lo" d="M594,350 L612,350 L612,256 L618,256"/>
+  <path class="lo" d="M814,310 L830,310 L830,220 L850,220"/>
+  <!-- tariffs feeding speed layer -->
+  <path class="lg" d="M760,294 L760,290 L584,290 L584,216"/>
+  <text class="s" x="640" y="287" style="font-size:9.3px">latest tariff</text>
+  <!-- grafana reads -->
+  <path class="lg" d="M814,360 L850,360"/>
+
+  <!-- observability -->
+  <rect class="b ob" x="4" y="512" width="992" height="88" rx="6"/>
+  <text class="t" x="14" y="532" style="fill:#3e2a8a">OBSERVABILITY (every stage)</text>
+  <text class="s" x="14" y="552">Structured JSON logs: same envelope in simulators, Spark, Airflow tasks and API (ts, level, service, stage, event + context)</text>
+  <text class="s" x="14" y="569">Metrics: Prometheus scrapes meter-simulator, tariff-dropper, speed-layer and API (incl. data freshness and reconciliation gauges)</text>
+  <text class="s" x="14" y="586">Alerts: 15 rules by stage &#8594; Alertmanager &#8594; API &#8594; ops_alerts.   Lineage: event_id, Kafka offset, batch_id, run_id on every bill, pipeline_runs</text>
+</svg>
+
+<div class="cap">Figure 1. Lambda architecture. Blue: speed path. Orange: batch path. Both read the same ingested data and write to one serving store.</div>
+</div>
+
+<h3>3.1 How one simulated day flows through the system</h3>
+<table>
+  <tr><th style="width:17%">When (simulated)</th><th>What happens</th><th style="width:22%">Layer</th></tr>
+  <tr><td>All day</td><td>Each meter publishes a reading every 15 minutes to <code>meter.readings</code>. Spark validates it, sends rejects to the dead-letter topic, archives valid events to the lake, and updates zone windows and household running totals in PostgreSQL every 5 to 10 s.</td><td>Sources, ingestion, speed</td></tr>
+  <tr><td>10:00 to 15:00</td><td>For every closed hour the speed layer checks each zone's renewable contribution and raises an alert under 20%.</td><td>Speed</td></tr>
+  <tr><td>00:00 next day</td><td>The Airflow run for the finished day starts. The tariff dropper uploads the day's CSV and then its manifest.</td><td>Batch source, orchestration</td></tr>
+  <tr><td>+ about 50 min</td><td>The sensor sees the manifest. The file is checked (SHA-256, row count), validated row by row, loaded; bad rows are quarantined.</td><td>Batch ingestion</td></tr>
+  <tr><td>+ about 3.6 h (45 s)</td><td>Grace period for late readings ends. Spark batch reads the day's raw Parquet, de-duplicates, totals each household, joins tariffs, applies billing rules and swaps the day's bills in one transaction.</td><td>Batch processing</td></tr>
+  <tr><td>+ a few seconds</td><td>Reconcile against the speed layer, pass the quality gate, publish the HTML and CSV report. The API now serves the exact bill for that day.</td><td>Batch, serving</td></tr>
+</table>
+
+<h2>4. Technology stack and justification</h2>
+<p>Each choice is tied to a constraint of this use case, with the alternative we considered.</p>
+<table>
+  <tr><th style="width:12%">Layer</th><th style="width:17%">Choice</th><th>Why it fits this use case</th><th style="width:25%">Alternative and why not</th></tr>
+  <tr><td>Stream ingestion</td><td>Apache Kafka (KRaft), topic <code>meter.readings</code>, 6 partitions, key <code>meter_id</code></td><td>Meters must never be blocked by a slow consumer, and the same events feed four independent queries. Kafka is a durable, replayable log, so a restarted query resumes from its checkpointed offset with no loss. Keying by meter keeps each meter's readings in order and spreads 120 keys evenly; keying by zone would give five hot keys.</td><td>RabbitMQ: no replay after consumption. Direct HTTP ingestion: couples meters to processing. MQTT is what real meters speak, and would sit in front of Kafka.</td></tr>
+  <tr><td>Batch ingestion</td><td>Landing zone in an S3-compatible object store, CSV plus manifest</td><td>A billing department delivers files. The manifest, written last, makes the upload atomic from the reader's side and carries a checksum, so a truncated file is detected.</td><td>Putting tariffs on Kafka: loses the "whole file is valid or refused" check.</td></tr>
+  <tr><td>Stream processing</td><td>Spark Structured Streaming</td><td>The use case needs event-time tumbling windows, a watermark for late data, stateful de-duplication and checkpointed exactly-once progress; all are built in. Micro-batch latency of seconds is ample for 15-minute windows. Most important for Lambda: it shares the DataFrame API with the batch layer.</td><td>Apache Storm: lower per-event latency, which this use case does not need, but windowing, state and exactly-once must be assembled by hand, and its API is unrelated to the batch job, so logic would be duplicated. Flink: excellent, but a second engine.</td></tr>
+  <tr><td>Batch processing</td><td>Spark (batch)</td><td>Partition-pruned scans of Parquet, exact global de-duplication, a join with reference data. Same code as the speed layer.</td><td>Plain SQL in PostgreSQL: would not scale past one node and would not read the lake.</td></tr>
+  <tr><td>Orchestration</td><td>Apache Airflow</td><td>The batch path is a dependency graph with external waits: a file that arrives late, a grace period, a Spark job, checks, a report. Airflow gives sensors, retries, a per-day run history and parameterised re-runs.</td><td>cron: no dependencies, retries or backfill. Triggering from the streaming job: ties batch correctness to stream health.</td></tr>
+  <tr><td>Master dataset</td><td>Parquet on an S3-compatible object store (SeaweedFS locally), partitioned by <code>event_date</code></td><td>Immutable, append-only, cheap, columnar. A daily job reads exactly one partition. The storage choice is a connection string: the same code runs on S3 or HDFS.</td><td>HDFS: same role, heavier to operate locally. Cassandra: built for key lookups, not full-partition scans. Keeping history only in Kafka: that is Kappa.</td></tr>
+  <tr><td>Serving store</td><td>PostgreSQL</td><td>The views are small and keyed (zone &times; window, household &times; day). The sinks must be idempotent, so we need upserts; the daily swap must be atomic, so we need transactions; the API and Grafana need joins. PostgreSQL gives all three.</td><td>Cassandra: the right answer at millions of meters for write throughput, but no transactions or joins, so idempotent swap and the merged view would move into application code.</td></tr>
+  <tr><td>Serving</td><td>FastAPI, Grafana</td><td>The brief asks for an API endpoint; FastAPI documents itself (OpenAPI). Grafana reads both PostgreSQL and Prometheus, so one tool shows the business view and pipeline health.</td><td>A custom web front end: more code, no extra insight.</td></tr>
+  <tr><td>Observability</td><td>Prometheus, Alertmanager, JSON logs</td><td>Pull-based metrics suit long-running jobs; alert rules are versioned files; Alertmanager groups and de-duplicates.</td><td>Logs only: cannot express "no data for N minutes".</td></tr>
+  <tr><td>Packaging</td><td>Docker Compose</td><td>The whole platform starts with one command on a laptop and is reproducible by the marker.</td><td>Kubernetes: right for production, excessive here.</td></tr>
+</table>
+<p>One note on the object store: we planned to use MinIO, but its public container images had been
+withdrawn when we built the project, so we used SeaweedFS. The change touched one service definition
+and no pipeline code, which is the point of coding against the S3 interface.</p>
+
+<h2>5. Implementation</h2>
+<h3>5.1 Data ingestion</h3>
+<p><b>Streaming source</b> (<code>simulators/stream_meter_simulator.py</code>). Readings follow a
+physical model: a daily demand curve with morning and evening peaks scaled per household, and a
+solar bell between 06:00 and 18:00 scaled by panel size and the zone's weather that day. The
+producer is idempotent with <code>acks=all</code>. To test robustness the simulator injects faults at
+configurable rates: 0.5% corrupt events (truncated JSON, missing field, negative value, unknown
+zone, bad timestamp), 1% duplicates, 2% late events (20 to 60 minutes) and 0.5% very late events
+(1 to 3 hours).</p>
+<p><b>Batch source</b> (<code>simulators/batch_tariff_dropper.py</code>). Shortly after simulated
+midnight it uploads <code>tariffs/dt=YYYY-MM-DD/tariffs.csv</code> and then
+<code>_manifest.json</code> with the row count and SHA-256. The file is deliberately imperfect:
+about 2% malformed rows, one duplicated household and about 2% of households missing. After a
+restart it backfills any day it missed.</p>
+<p><b>Robustness on the consuming side.</b> Topics are created explicitly with chosen partition
+counts and retention; auto-creation is disabled. Invalid events are never dropped silently: each goes
+to <code>meter.readings.dlq</code> with its reject reason and Kafka coordinates, so it can be
+inspected and replayed. The tariff loader verifies the checksum and row count, validates every row,
+quarantines rejects in <code>tariff_rejects</code>, and refuses the whole file if more than 20% of
+rows are bad.</p>
+
+<h3>5.2 Processing: speed layer</h3>
+<p>One Spark application runs four streaming queries, each with its own checkpoint, so each fails
+and recovers independently.</p>
+<table>
+  <tr><th style="width:12%">Query</th><th>Logic</th><th style="width:30%">Sink</th></tr>
+  <tr><td><code>dlq</code></td><td>Parse JSON, apply the contract (required fields, timestamp, known zone, value ranges); keep the rejects.</td><td>Kafka <code>meter.readings.dlq</code></td></tr>
+  <tr><td><code>archive</code></td><td>All valid events, unaggregated, including duplicates and late events.</td><td>Parquet <code>raw/meter_readings/event_date=&hellip;</code></td></tr>
+  <tr><td><code>zone_load</code></td><td>30-minute watermark, de-duplicate by <code>event_id</code>, 15-minute tumbling windows by zone: consumption, solar, net load, renewable share, distinct meters. Then evaluate the low-renewable alert.</td><td>Upsert into <code>rt_zone_load</code>; alerts to <code>grid_alerts</code> and Kafka <code>grid.alerts</code></td></tr>
+  <tr><td><code>household</code></td><td>Same de-duplication, running totals per household per day, joined in each micro-batch with the latest known tariff to price a provisional bill.</td><td>Upsert into <code>rt_household_today</code></td></tr>
+</table>
+<p>All sinks are idempotent (upsert on the natural key), so a micro-batch replayed after a crash
+rewrites the same rows. We tested this by restarting the speed layer mid-run: the queries resumed at
+the next batch id with no gap and no duplicate rows. The alert rule only evaluates hours whose four
+windows have all closed, and its unique key makes re-evaluation harmless.</p>
+
+<h3>5.3 Processing: batch layer</h3>
+<p>The DAG <code>grid_daily_billing</code> runs once per simulated day (Figure 5). Its Spark job
+reads one date partition of raw Parquet, de-duplicates globally (exact, no watermark), computes
+household totals with the <i>same</i> function the speed layer uses, joins the day's tariffs and
+applies the billing rules:</p>
+<pre>net = consumption - solar;  import = max(net, 0);  export = max(-net, 0)
+energy_charge = import x tariff_rate x tier_multiplier        (TIER_1 1.00, TIER_2 1.25, TIER_3 1.60)
+bill = energy_charge - 20% subsidy (if flagged) - export x tariff_rate x 0.5 + fixed daily charge</pre>
+<p>If a household is missing from the day's tariff file, the most recent earlier tariff is carried
+forward and the bill records <code>tariff_source = carried_forward</code>. Results are bulk-loaded
+into a staging table and swapped into <code>daily_household_bill</code> in one transaction, so a
+reader never sees a half-written day and a re-run replaces the day cleanly. The same result is
+written as Parquet to the curated zone of the lake. Every bill row carries the id of the run that
+produced it.</p>
+
+<h3>5.4 Storage and serving</h3>
+<p>The lake has three zones: <code>landing</code> (files as delivered), <code>raw</code> (immutable
+events, the master dataset) and <code>curated</code> (daily bills). PostgreSQL holds the real-time
+views (<code>rt_*</code>), the batch views (<code>daily_*</code>), reference data, alerts and
+lineage.</p>
+<p>The API exposes the real-time view (<code>/api/v1/grid/realtime</code>, zone history, household
+today), the batch view (<code>/api/v1/billing/{day}</code>, reports, reconciliation) and the
+<b>merged</b> view that is the purpose of a Lambda serving layer:
+<code>/api/v1/households/{id}/bill-to-date</code> returns exact bills for closed days plus the
+provisional estimate for days not yet billed.</p>
+
+<h2>6. Observability design</h2>
+<p>We treated observability as a requirement with its own design. The principle: monitor the
+<i>data</i> (is it arriving, fresh, valid, correct?) and not only the processes.</p>
+<table>
+  <tr><th style="width:12%">Stage</th><th style="width:29%">Structured logs (JSON)</th><th style="width:31%">Metrics (Prometheus)</th><th>Alert rules</th></tr>
+  <tr><td>Ingestion</td><td><code>simulator_heartbeat</code>, <code>tariff_file_dropped</code>, <code>delivery_failed</code>, <code>topics_ready</code></td><td>events produced by kind, delivered, delivery failures, late events pending, files and rows dropped, last drop time</td><td>NoMeterDataReceived, MeterSimulatorDown, KafkaDeliveryFailures, HighRejectRate, TariffFileMissing</td></tr>
+  <tr><td>Processing (speed)</td><td><code>micro_batch</code> with query, batch id, rows, duration, lag, watermark; <code>events_rejected</code>; <code>grid_alert_raised</code></td><td>input and processing rate, batch duration, Kafka lag, rows dropped by watermark, state size, rejects by reason, last progress time (per query)</td><td>SpeedLayerDown, StreamingQueryStalled, KafkaConsumerLagHigh</td></tr>
+  <tr><td>Processing (batch)</td><td><code>tariffs_loaded</code>, <code>batch_finished</code>, <code>reconciled</code>, <code>quality_gate_passed</code>, <code>task_failed</code>, each with run id and simulated date</td><td>failed tasks in the last 15 minutes; per-task duration and result in <code>pipeline_runs</code></td><td>BatchTaskFailed</td></tr>
+  <tr><td>Storage</td><td>sink failures with the exception</td><td>rows written per sink, sink errors</td><td>SinkWriteErrors</td></tr>
+  <tr><td>Serving</td><td>one line per request with trace id, path, status, duration</td><td>request count and latency histogram; real-time view age; daily report age; reconciliation difference; zone load and renewable share</td><td>ServingStoreDown, RealtimeViewStale, DailyReportStale, SpeedBatchReconciliationDrift</td></tr>
+  <tr><td>Business</td><td><code>grid_alert_raised</code></td><td>alerts raised by zone</td><td>LowRenewableContribution</td></tr>
+</table>
+<p><b>Logging.</b> Every component uses one formatter, so every line is a JSON object with the same
+envelope: <code>ts, level, service, stage, event</code> plus context. Example from the speed layer:</p>
+<pre>{&quot;ts&quot;: &quot;2026-09-30T09:01:13.628+00:00&quot;, &quot;level&quot;: &quot;INFO&quot;, &quot;service&quot;: &quot;speed-layer&quot;, &quot;stage&quot;: &quot;processing&quot;, &quot;event&quot;: &quot;micro_batch&quot;, &quot;query&quot;: &quot;zone_load&quot;, &quot;batch_id&quot;: 391, &quot;input_rows&quot;: 164, &quot;duration_ms&quot;: 5161, &quot;kafka_lag&quot;: 0, &quot;dropped_late&quot;: 0, &quot;watermark&quot;: &quot;2026-01-08T04:35:28.000Z&quot;}
+{&quot;ts&quot;: &quot;2026-09-30T09:01:12.229+00:00&quot;, &quot;level&quot;: &quot;WARNING&quot;, &quot;service&quot;: &quot;speed-layer&quot;, &quot;stage&quot;: &quot;processing&quot;, &quot;event&quot;: &quot;events_rejected&quot;, &quot;batch_id&quot;: 197, &quot;by_reason&quot;: {&quot;value_out_of_range&quot;: 1, &quot;bad_timestamp&quot;: 1, &quot;malformed_json&quot;: 1}, &quot;dlq_topic&quot;: &quot;meter.readings.dlq&quot;}</pre>
+<p><b>Health checks and alerts.</b> 15 rules are defined in
+<code>observability/prometheus/alerts.yml</code>, grouped by stage. The two the brief names are
+present: <i>no data received in N minutes</i> (NoMeterDataReceived) and <i>error rate above
+threshold</i> (HighRejectRate, more than 5% of events rejected). Alertmanager groups alerts and
+posts them to the API, which stores them in <code>ops_alerts</code>, so operational alerts can be
+queried next to the data they concern. <code>GET /health</code> returns HTTP 503 when the real-time
+view is stale.</p>
+<p><b>Tracing and lineage.</b> We did not deploy a distributed tracer. Instead identifiers are
+carried through the stages so a record can be followed by hand: each event has an
+<code>event_id</code> and its Kafka partition and offset are stored with it in the lake and in the
+dead-letter topic; each micro-batch logs its <code>batch_id</code>; each batch task logs the Airflow
+<code>run_id</code>, which is also stored on every bill row and in the <code>pipeline_runs</code>
+audit table; each API request gets an <code>x-request-id</code>. This is enough to answer "which
+run produced this bill, from which file, and what did it reject?".</p>
+<p><b>Diagnosing a failure: what we observed.</b> We stopped the meter simulator while the pipeline
+was running. MeterSimulatorDown fired after 38 s, NoMeterDataReceived after 71 s
+and RealtimeViewStale after 76 s; <code>/health</code> turned to <code>degraded</code>.
+After restarting the simulator all three resolved within about 20 s without intervention
+(Figure 7). The observability also caught a fault we did not plan: after we changed an aggregation,
+the speed layer could not restore its state from the old checkpoint and restarted in a loop. The
+dashboard showed input rate at zero and view age climbing within a minute, and the log named the
+cause (<code>StateSchemaNotCompatible</code>).</p>
+
+<h2>7. Results</h2>
+<p>The figures below come from one continuous run of 6 simulated days
+(36 minutes of wall-clock time).</p>
+<div class="two">
+<div>
+<table>
+  <tr><th>Ingestion</th><th class="n">Count</th></tr>
+  <tr><td>Events produced</td><td class="n">75,770</td></tr>
+  <tr><td>&nbsp;&nbsp;on time</td><td class="n">73,541</td></tr>
+  <tr><td>&nbsp;&nbsp;late (20 to 60 min)</td><td class="n">1,503</td></tr>
+  <tr><td>&nbsp;&nbsp;very late (1 to 3 h)</td><td class="n">372</td></tr>
+  <tr><td>&nbsp;&nbsp;corrupt (all routed to the DLQ)</td><td class="n">354</td></tr>
+  <tr><td>Duplicates sent in addition</td><td class="n">726</td></tr>
+  <tr><td>Kafka delivery failures</td><td class="n">0</td></tr>
+  <tr><td>Rejected by the speed layer</td><td class="n">352</td></tr>
+</table>
+</div>
+<div>
+<table>
+  <tr><th>Processing and serving</th><th class="n">Value</th></tr>
+  <tr><td>Typical micro-batch duration</td><td class="n">1.2 to 4.4 s</td></tr>
+  <tr><td>Kafka consumer lag (max observed)</td><td class="n">0 offsets</td></tr>
+  <tr><td>Real-time view age (typical)</td><td class="n">1.6 s</td></tr>
+  <tr><td>Readings dropped by the watermark</td><td class="n">250</td></tr>
+  <tr><td>Daily batch runs succeeded</td><td class="n">7</td></tr>
+  <tr><td>Spark batch job duration</td><td class="n">21 s</td></tr>
+  <tr><td>Low-renewable alerts raised</td><td class="n">59</td></tr>
+  <tr><td>Automated tests</td><td class="n">29 passed</td></tr>
+</table>
+</div>
+</div>
+
+<h3>7.1 Real-time answer: grid load and renewable contribution by zone</h3>
+<div class="fig"><img src="img/grafana_grid_ops_1.png" alt="Grid operations dashboard">
+<div class="cap">Figure 2. Grid Operations dashboard (speed layer). Fifteen minutes of wall-clock time show three simulated days: evening demand peaks, the midday solar bell, and zones whose renewable contribution falls under the 20% line on overcast days.</div></div>
+<p>The API endpoint returns the same view as JSON (abridged):</p>
+<pre>{&quot;as_of_window_start&quot;: &quot;2026-01-08T05:00:00Z&quot;, &quot;grid&quot;: {&quot;consumption_kwh&quot;: 16.541, &quot;solar_kwh&quot;: 0.0, &quot;net_load_kwh&quot;: 16.541, &quot;renewable_share&quot;: 0.0, &quot;active_meters&quot;: 117}, &quot;zones&quot;: [{&quot;grid_zone&quot;: &quot;ZONE-CENTRAL&quot;, &quot;window_start&quot;: &quot;2026-01-08T05:00:00Z&quot;, &quot;window_end&quot;: &quot;2026-01-08T05:15:00Z&quot;, &quot;consumption_kwh&quot;: 3.528, &quot;solar_kwh&quot;: 0.0, &quot;net_load_kwh&quot;: 3.528, &quot;renewable_share&quot;: 0.0, &quot;active_meters&quot;: 24, &quot;low_renewable&quot;: true}, &quot;... four more zones ...&quot;]}</pre>
+
+<h3>7.2 Daily answer: billing and solar contribution per household</h3>
+<div class="fig"><img src="img/daily_report.png" alt="Daily billing report" style="width:62%">
+<div class="cap">Figure 3. The consolidated daily report published by the batch layer (HTML; a CSV with all households is published alongside).</div></div>
+<div class="fig"><img src="img/grafana_grid_ops_2.png" alt="Batch views in Grafana" style="width:86%">
+<div class="cap">Figure 4. Batch views in the dashboard: alerts, billing by zone, reconciliation and the highest bills for the latest closed day.</div></div>
+<div class="fig"><img src="img/airflow_dag.png" alt="Airflow DAG" style="width:80%">
+<div class="cap">Figure 5. The daily DAG in Airflow. Each column on the left is one simulated day.</div></div>
+
+<h3>7.3 Speed layer versus batch layer</h3>
+<p>This table is the empirical case for the architecture. For each closed day the batch layer's
+exact total is compared with what the speed layer had accumulated.</p>
+<table><tr><th class="">Simulated day</th><th class="n">Batch kWh (exact)</th><th class="n">Speed kWh (real-time)</th><th class="n">Difference %</th><th class="n">Readings (batch)</th><th class="n">Missed by speed layer</th><th class="n">Zone min %</th><th class="n">Zone max %</th></tr><tr><td class="">2026-01-01</td><td class="n">1142.19</td><td class="n">1137.78</td><td class="n">-0.386</td><td class="n">4014</td><td class="n">16</td><td class="n">-0.54</td><td class="n">-0.19</td></tr><tr><td class="">2026-01-02</td><td class="n">2336.24</td><td class="n">2327.07</td><td class="n">-0.393</td><td class="n">11475</td><td class="n">41</td><td class="n">-0.59</td><td class="n">-0.25</td></tr><tr><td class="">2026-01-03</td><td class="n">2334.24</td><td class="n">2326.65</td><td class="n">-0.325</td><td class="n">11456</td><td class="n">43</td><td class="n">-0.39</td><td class="n">-0.21</td></tr><tr><td class="">2026-01-04</td><td class="n">2336.74</td><td class="n">2328.91</td><td class="n">-0.335</td><td class="n">11472</td><td class="n">35</td><td class="n">-0.49</td><td class="n">-0.16</td></tr><tr><td class="">2026-01-05</td><td class="n">2336.52</td><td class="n">2327.78</td><td class="n">-0.374</td><td class="n">11469</td><td class="n">50</td><td class="n">-0.58</td><td class="n">-0.17</td></tr><tr><td class="">2026-01-06</td><td class="n">2340.06</td><td class="n">2332.52</td><td class="n">-0.322</td><td class="n">11467</td><td class="n">33</td><td class="n">-0.43</td><td class="n">-0.23</td></tr></table>
+<p>The speed layer was consistently a fraction of a percent low, by exactly the readings that
+arrived after its watermark. The batch layer counted them. The bills are therefore correct, and the
+real-time view was accurate enough for its purpose.</p>
+<p>The merged view for one household, as served by the API:</p>
+<pre>{&quot;household_id&quot;: &quot;HH-0007&quot;, &quot;billed_days&quot;: 6, &quot;billed_total&quot;: 8912.36, &quot;unbilled_days&quot;: [&quot;2026-01-07&quot;, &quot;2026-01-08&quot;], &quot;unbilled_estimate&quot;: 1624.24, &quot;total_to_date&quot;: 10536.6}</pre>
+
+<h3>7.4 Data quality of the batch source</h3>
+<table><tr><th class="">Simulated day</th><th class="n">Tariff rows loaded</th><th class="n">Rows rejected</th><th class="n">Billed at same-day tariff</th><th class="n">Carried forward</th><th class="n">Default tariff</th><th class="n">Total billed (LKR)</th></tr><tr><td class="">2026-01-01</td><td class="n">111</td><td class="n">10</td><td class="n">111</td><td class="n">0</td><td class="n">9</td><td class="n">60496.22</td></tr><tr><td class="">2026-01-02</td><td class="n">114</td><td class="n">6</td><td class="n">114</td><td class="n">6</td><td class="n">0</td><td class="n">105265.16</td></tr><tr><td class="">2026-01-03</td><td class="n">114</td><td class="n">2</td><td class="n">114</td><td class="n">6</td><td class="n">0</td><td class="n">116278.47</td></tr><tr><td class="">2026-01-04</td><td class="n">117</td><td class="n">2</td><td class="n">117</td><td class="n">3</td><td class="n">0</td><td class="n">99496.29</td></tr><tr><td class="">2026-01-05</td><td class="n">117</td><td class="n">2</td><td class="n">117</td><td class="n">3</td><td class="n">0</td><td class="n">121038.86</td></tr><tr><td class="">2026-01-06</td><td class="n">118</td><td class="n">3</td><td class="n">118</td><td class="n">2</td><td class="n">0</td><td class="n">96551.96</td></tr></table>
+
+<h3>7.5 Observability results</h3>
+<div class="fig"><img src="img/grafana_pipeline_1.png" alt="Pipeline health dashboard">
+<div class="cap">Figure 6. Pipeline Health dashboard: ingestion by kind, streaming throughput, batch duration, consumer lag, state size, rejects by reason, rows dropped by the watermark, sink throughput.</div></div>
+<div class="fig"><div class="crop" style="height:91mm;width:70%;margin:0 auto"><img src="img/prometheus_alerts_firing.png" alt="Alerts firing" style="width:100%"></div>
+<div class="cap">Figure 7. Alert rules during the induced failure: the stream source is down, no data is reaching the speed layer, and the real-time view is stale.</div></div>
+<div class="fig"><img src="img/grafana_pipeline_2.png" alt="Pipeline health dashboard, lower half" style="width:86%">
+<div class="cap">Figure 8. API latency, data freshness, alerts firing and the batch layer's audit trail.</div></div>
+
+<h2>8. Limitations, trade-offs and production scale</h2>
+<h3>8.1 Limitations of what we built</h3>
+<ul>
+  <li><b>Single node everywhere.</b> One Kafka broker with replication factor 1, Spark in local mode, one PostgreSQL. There is no fault tolerance against a machine failure.</li>
+  <li><b>Late data beyond the grace period.</b> The batch run waits 45 s (about 3.6 simulated hours) after midnight. A reading later than that is in the lake but not in the bill until that day is re-run. There is no automatic re-run.</li>
+  <li><b>The lateness tolerance of the speed layer is coarser than the watermark suggests.</b> The watermark only advances between micro-batches, and a 5 to 10 s trigger is 24 to 48 simulated minutes. Most "late" events were therefore still accepted; mainly the "very late" ones were dropped.</li>
+  <li><b>Small files.</b> The archive query writes one file per trigger, about 30 per simulated day. At real scale this needs compaction.</li>
+  <li><b>JSON without a schema registry.</b> The contract is enforced in the consumer. A producer can still publish a breaking change.</li>
+  <li><b>Two alerts fire briefly at cold start.</b> NoMeterDataReceived and RealtimeViewStale fire for about 30 s while the speed layer is still starting, then resolve.</li>
+  <li><b>State schema evolution.</b> Changing a stateful aggregation invalidates the checkpoint. We hit this and had to reset state.</li>
+  <li><b>At-least-once on the Kafka sinks.</b> The dead-letter and alert topics can receive a duplicate if a micro-batch is replayed. The PostgreSQL sinks are idempotent; these two are not.</li>
+  <li><b>Tracing is by correlated identifiers,</b> not a tracing system with spans.</li>
+  <li><b>Security is out of scope:</b> development credentials, no TLS, anonymous read access to Grafana.</li>
+  <li><b>Billing rules are our interpretation.</b> The brief defines the tariff fields, not the formula.</li>
+</ul>
+<h3>8.2 What we would do differently at production scale</h3>
+<table>
+  <tr><th style="width:22%">Area</th><th>Change</th></tr>
+  <tr><td>Ingestion</td><td>Three or more brokers, replication factor 3, <code>min.insync.replicas=2</code>; Avro or Protobuf with a schema registry and compatibility rules; meters connect through MQTT gateways; partitions sized to throughput.</td></tr>
+  <tr><td>Processing</td><td>Spark on Kubernetes or YARN with <code>SparkSubmitOperator</code>; RocksDB state store; checkpoints on the object store; dynamic allocation for the batch job.</td></tr>
+  <tr><td>Storage</td><td>Iceberg or Delta tables on S3 instead of bare Parquet: atomic commits, compaction, schema evolution, and merging late data into closed partitions.</td></tr>
+  <tr><td>Serving</td><td>With millions of meters the real-time view moves to Cassandra or a real-time OLAP store; PostgreSQL remains for billing results, partitioned by month.</td></tr>
+  <tr><td>Batch correctness</td><td>A second, later "final" run per day and an automatic re-run when late data or a corrected tariff file lands; data-quality checks as a framework.</td></tr>
+  <tr><td>Observability</td><td>Central log store, OpenTelemetry traces, Kafka and Airflow exporters, paging with on-call rotation, service level objectives for freshness.</td></tr>
+  <tr><td>Operations</td><td>Secrets manager, TLS and authentication on every interface, infrastructure as code, CI that runs the tests on every commit (a workflow is included).</td></tr>
+</table>
+
+<h2>9. Assumptions and simulated time</h2>
+<ul>
+  <li><b>Time compression.</b> One simulated day is 300 s of wall-clock time (288&times;). A 15-minute reading interval is 3.125 s, the 30-minute watermark is 6.25 s, and the daily DAG runs every 5 minutes. The mapping is stored once in PostgreSQL so all components agree. All event times and windows are in simulated time; alert-rule durations are in wall-clock time.</li>
+  <li><b>Scale.</b> 120 households, five zones, about 38 events per second.</li>
+  <li><b>Weather</b> is simulated inside the stream source (per zone and day) rather than delivered as a second batch file.</li>
+  <li><b>The first simulated day is partial</b> because the pipeline starts partway through it.</li>
+  <li><b>Currency</b> is shown as LKR; rates and rules are illustrative.</li>
+  <li><b>AI assistance.</b> An AI coding assistant (Claude) was used in developing this project, as the brief permits.</li>
+</ul>
+
+<h2>10. Statement of individual contributions</h2>
+<table>
+  <tr><th style="width:30%">Member</th><th>Contribution</th></tr>
+  <tr><td>[Name 1 - index no.]</td><td>[to be completed by the group]</td></tr>
+  <tr><td>[Name 2 - index no.]</td><td>[to be completed by the group]</td></tr>
+  <tr><td>[Name 3 - index no.]</td><td>[to be completed by the group]</td></tr>
+</table>
+
+<h2>Appendix: reproduce</h2>
+<pre>docker compose up -d --build        # start everything; first report after about 7 minutes
+docker compose run --rm --no-deps --entrypoint "" speed-layer python -m pytest -q    # tests
+docker compose down -v               # stop and delete data</pre>
+<p>Grafana <code>localhost:3000</code>, Airflow <code>localhost:8080</code>, API
+<code>localhost:8000/docs</code>, Prometheus <code>localhost:9090</code>. Full instructions are in
+<code>README.md</code>; the demo walkthrough is in <code>docs/DEMO_SCRIPT.md</code>.</p>
+
+</body>
+</html>
