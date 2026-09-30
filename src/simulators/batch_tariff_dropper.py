@@ -1,17 +1,4 @@
-"""Batch source: drops one tariff/billing reference file per simulated day.
-
-Shortly after each simulated midnight, the "billing department" uploads the
-tariff file for the day that just ended into the landing zone:
-
-    s3://grid-landing/tariffs/dt=YYYY-MM-DD/tariffs.csv
-    s3://grid-landing/tariffs/dt=YYYY-MM-DD/_manifest.json   (row count + SHA-256)
-
-The manifest is written last. Its presence tells the pipeline that the upload
-is complete, and its checksum lets the pipeline detect a truncated file.
-
-Like a real external feed, the file is imperfect: a few rows are malformed,
-one household is listed twice and a few households are missing.
-"""
+"""Batch source: drops one tariff/billing reference file per simulated day."""
 from __future__ import annotations
 
 import csv
@@ -40,7 +27,7 @@ ROWS = Counter("batch_rows_dropped_total", "Tariff rows uploaded", ["quality"])
 LAST_DROP = Gauge("batch_last_drop_unix_seconds", "Wall-clock time of the last upload")
 
 BASE_RATE = {"TIER_1": 25.0, "TIER_2": 32.0, "TIER_3": 45.0}
-CATCH_UP_DAYS = 3  # after a restart, backfill at most this many missed days
+CATCH_UP_DAYS = 3
 
 _running = True
 
@@ -53,13 +40,13 @@ def _stop(*_):
 def build_tariff_csv(households: list[Household], day: date, seed: int) -> tuple[bytes, dict]:
     """Generate the file for one day. Deterministic per (seed, day)."""
     rng = random.Random(zlib.crc32(f"{seed}|tariff|{day.isoformat()}".encode()))
-    daily_factor = rng.uniform(0.95, 1.10)  # the rate moves a little every day
+    daily_factor = rng.uniform(0.95, 1.10)
     rows: list[dict] = []
     stats = {"good": 0, "bad": 0, "missing": 0, "duplicate": 0}
 
     for hh in households:
         roll = rng.random()
-        if roll < 0.02:  # household absent from today's file
+        if roll < 0.02:
             stats["missing"] += 1
             continue
         row = {
@@ -130,8 +117,7 @@ def main() -> None:
 
     while _running:
         now = datetime.now(timezone.utc)
-        current = clock.day_index(now)  # the simulated day still in progress
-        # Upload any finished day that has no file yet (normally just yesterday).
+        current = clock.day_index(now)
         for index in range(max(0, current - CATCH_UP_DAYS), current):
             due = clock.day_end_wall(index).timestamp() + settings.tariff_drop_delay_seconds
             day = clock.sim_date(index)
@@ -139,7 +125,7 @@ def main() -> None:
             if time.time() >= due and not s3.object_exists(s3c, settings.bucket_landing, manifest_key):
                 try:
                     drop_file(s3c, settings, households, day)
-                except Exception:  # noqa: BLE001 - keep the feed alive, retry next loop
+                except Exception:  # noqa: BLE001
                     log.exception("tariff_drop_failed", dt=day.isoformat())
         time.sleep(2)
 

@@ -1,10 +1,7 @@
-# Alert rules, grouped by pipeline stage. Durations are wall-clock; remember that
-# 5 wall-clock minutes are one simulated day.
 groups:
   - name: ingestion
     rules:
       - alert: NoMeterDataReceived
-        # The health check asked for by the brief: "no data received in N minutes".
         expr: sum(rate(speed_input_rows_total{query="zone_load"}[30s])) == 0 or absent(speed_input_rows_total{query="zone_load"})
         for: 30s
         labels: {severity: critical, stage: ingestion}
@@ -26,7 +23,6 @@ groups:
           summary: "The producer could not deliver {{ $value | printf \"%.0f\" }} events to Kafka"
 
       - alert: HighRejectRate
-        # Error-rate rule: share of events routed to the dead-letter topic.
         expr: sum(rate(speed_rejected_events_total[2m])) / sum(rate(speed_input_rows_total{query="dlq"}[2m])) > 0.05
         for: 1m
         labels: {severity: warning, stage: ingestion}
@@ -110,7 +106,6 @@ groups:
   - name: business
     rules:
       - alert: LowRenewableContribution
-        # Mirrors the domain alert raised by the speed layer (grid_alerts table, grid.alerts topic).
         expr: grid_business_alerts_recent > 0
         labels: {severity: info, stage: business}
         annotations:

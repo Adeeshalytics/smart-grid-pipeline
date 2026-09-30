@@ -1,17 +1,4 @@
-"""Streaming source: simulated smart meters publishing readings to Kafka.
-
-Each household's meter reports once per READING_INTERVAL_SIM_MINUTES of
-simulated time (15 simulated minutes = ~3 s of wall-clock time by default).
-The meters are staggered, so the topic receives a steady flow of events rather
-than one burst per interval.
-
-To make the pipeline prove its robustness, the simulator deliberately injects
-the faults a real meter network produces:
-  * corrupt events   - invalid JSON, missing fields, impossible values
-  * duplicates       - the same event_id sent twice (at-least-once delivery)
-  * late events      - held back 20-60 simulated minutes before being sent
-  * very late events - held back 1-3 simulated hours (past the watermark)
-"""
+"""Streaming source: simulated smart meters publishing readings to Kafka."""
 from __future__ import annotations
 
 import heapq
@@ -104,7 +91,6 @@ def main() -> None:
         {
             "bootstrap.servers": settings.kafka_bootstrap,
             "client.id": "meter-simulator",
-            # Idempotent producer + acks=all: no loss and no broker-side duplicates on retry.
             "enable.idempotence": True,
             "acks": "all",
             "linger.ms": 50,
@@ -113,8 +99,8 @@ def main() -> None:
     )
 
     interval = clock.wall_seconds(timedelta(minutes=settings.reading_interval_sim_minutes))
-    gap = interval / len(households)  # stagger meters evenly across the interval
-    held: list[tuple[float, int, str, bytes]] = []  # (release_at, seq, key, payload)
+    gap = interval / len(households)
+    held: list[tuple[float, int, str, bytes]] = []
     seq = 0
     log.info(
         "simulator_started",
@@ -131,7 +117,6 @@ def main() -> None:
         for hh in households:
             if not _running:
                 break
-            # Release any held-back (late) events that are now due.
             now = time.monotonic()
             while held and held[0][0] <= now:
                 _, _, key, payload = heapq.heappop(held)

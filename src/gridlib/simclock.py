@@ -1,12 +1,4 @@
-"""Simulated clock.
-
-The assignment allows compressing time. We map one simulated day onto
-SIM_DAY_SECONDS of wall-clock time (default 300 s, i.e. a 288x speed-up).
-
-The mapping is anchored once and stored in PostgreSQL (`sim_clock`), so every
-component - both simulators, the speed layer and the Airflow DAG - agrees on
-what "simulated now" is, even across container restarts.
-"""
+"""Simulated clock."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,9 +9,9 @@ from .config import Settings
 
 @dataclass(frozen=True)
 class SimClock:
-    anchor_wall: datetime  # wall-clock instant that corresponds to sim_epoch
-    sim_epoch: datetime  # simulated instant at the anchor (midnight, UTC)
-    day_seconds: int  # wall-clock seconds per simulated day
+    anchor_wall: datetime
+    sim_epoch: datetime
+    day_seconds: int
 
     @property
     def speedup(self) -> float:
@@ -51,11 +43,7 @@ class SimClock:
 
 
 def floor_to_day_boundary(wall: datetime, day_seconds: int) -> datetime:
-    """Align the anchor to a multiple of day_seconds since the Unix epoch.
-
-    With the default 300 s this lands on a 5-minute wall-clock boundary, which
-    is what lets the Airflow cron schedule (*/5) coincide with simulated midnight.
-    """
+    """Align the anchor to a multiple of day_seconds since the Unix epoch."""
     epoch = int(wall.timestamp())
     return datetime.fromtimestamp(epoch - epoch % day_seconds, tz=timezone.utc)
 

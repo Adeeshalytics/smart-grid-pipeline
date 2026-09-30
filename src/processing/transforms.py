@@ -1,11 +1,4 @@
-"""Transformations shared by the speed layer and the batch layer.
-
-The classic weakness of a Lambda architecture is that the same business logic
-has to be written twice, once per layer, and the two copies drift apart. Here
-every transformation is a function of a DataFrame, and a DataFrame can be
-either streaming or static. Both `speed_layer.py` and `batch_billing.py` call
-these same functions, so validation, aggregation and billing rules exist once.
-"""
+"""Transformations shared by the speed layer and the batch layer."""
 from __future__ import annotations
 
 from functools import reduce
@@ -32,7 +25,6 @@ READING_SCHEMA = StructType(
 )
 
 
-# --------------------------------------------------------------------- ingestion
 def parse_kafka(kafka_df: DataFrame) -> DataFrame:
     """Decode the Kafka value as JSON, keeping the raw payload and its coordinates."""
     return (
@@ -50,10 +42,7 @@ def parse_kafka(kafka_df: DataFrame) -> DataFrame:
 
 
 def with_reject_reason(df: DataFrame) -> DataFrame:
-    """Add `event_ts` and `reject_reason` (NULL means the reading is valid).
-
-    Mirrors gridlib.schemas.validate_reading; the checks run in the same order.
-    """
+    """Add `event_ts` and `reject_reason` (NULL means the reading is valid)."""
     required = [F.col(c) for c in schemas.REQUIRED_FIELDS]
     all_null = reduce(Column.__and__, [c.isNull() for c in required])
     any_null = reduce(Column.__or__, [c.isNull() for c in required])
@@ -95,13 +84,8 @@ def rejected_readings(df: DataFrame) -> DataFrame:
     )
 
 
-# -------------------------------------------------------------------- processing
 def deduplicate(df: DataFrame, watermark: str | None = None) -> DataFrame:
-    """Remove redelivered events by event_id.
-
-    Streaming: state is bounded by the watermark, so memory does not grow forever.
-    Batch: a plain global de-duplication, which is exact.
-    """
+    """Remove redelivered events by event_id."""
     if df.isStreaming:
         return df.withWatermark("event_ts", watermark).dropDuplicatesWithinWatermark(["event_id"])
     return df.dropDuplicates(["event_id"])
@@ -158,13 +142,8 @@ def renewable_share(solar_col: str, consumption_col: str) -> Column:
     )
 
 
-# ----------------------------------------------------- joining the two sources
 def tariffs_as_of(tariffs: DataFrame, sim_date: str) -> DataFrame:
-    """Pick, per household, the most recent tariff on or before `sim_date`.
-
-    If a household is missing from that day's file, yesterday's tariff is
-    carried forward and the row says so in `tariff_source`.
-    """
+    """Pick, per household, the most recent tariff on or before `sim_date`."""
     latest = Window.partitionBy("household_id").orderBy(F.col("dt").desc())
     return (
         tariffs.where(F.col("dt") <= F.lit(sim_date).cast("date"))

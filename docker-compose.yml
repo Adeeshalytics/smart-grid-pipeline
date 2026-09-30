@@ -1,15 +1,3 @@
-# Smart Grid Energy Monitoring & Billing - Lambda architecture, end to end.
-#
-#   docker compose up -d --build
-#
-# Sources      meter-simulator (stream), tariff-dropper (daily batch file)
-# Ingestion    kafka, objectstore (landing zone)
-# Speed layer  speed-layer (Spark Structured Streaming)
-# Batch layer  airflow (orchestration + Spark batch job)
-# Storage      objectstore (raw + curated Parquet), postgres (serving store)
-# Serving      api (FastAPI), grafana
-# Observability prometheus, alertmanager, grafana
-
 name: smart-grid-pipeline
 
 x-python-image: &python-image
@@ -32,7 +20,6 @@ x-grid-env: &grid-env
   WATERMARK: ${WATERMARK:-30 minutes}
 
 services:
-  # ------------------------------------------------------------ infrastructure
   kafka:
     image: apache/kafka:3.9.0
     environment:
@@ -48,7 +35,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_LOG_DIRS: /var/lib/kafka/data
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # topics are created explicitly by `init`
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
     ports: ["29092:29092"]
     volumes: [kafka-data:/var/lib/kafka/data]
@@ -76,7 +63,6 @@ services:
       retries: 12
     restart: unless-stopped
 
-  # S3-compatible object store: landing zone, data lake (Parquet) and reports.
   objectstore:
     image: chrislusf/seaweedfs:4.48
     command: server -dir=/data -s3 -s3.port=8333 -volume.max=50 -master.volumeSizeLimitMB=256
@@ -92,7 +78,6 @@ services:
       retries: 20
     restart: unless-stopped
 
-  # One-shot job: create Kafka topics and object-store buckets, then exit.
   init:
     <<: *python-image
     command: ["sh", "-c", "python -m ingestion.topics && python -m ingestion.buckets"]
@@ -101,7 +86,6 @@ services:
       kafka: {condition: service_healthy}
       objectstore: {condition: service_healthy}
 
-  # -------------------------------------------------------------- data sources
   meter-simulator:
     <<: *python-image
     command: ["python", "-m", "simulators.stream_meter_simulator"]
@@ -120,7 +104,6 @@ services:
       postgres: {condition: service_healthy}
     restart: unless-stopped
 
-  # --------------------------------------------------------------- speed layer
   speed-layer:
     build: {context: ., dockerfile: docker/spark.Dockerfile}
     image: grid-spark
@@ -141,9 +124,8 @@ services:
       init: {condition: service_completed_successfully}
       postgres: {condition: service_healthy}
     mem_limit: 2g
-    restart: unless-stopped   # a failed query exits the driver; it resumes from the checkpoints
+    restart: unless-stopped
 
-  # --------------------------------------------------------------- batch layer
   airflow:
     build: {context: ., dockerfile: docker/airflow.Dockerfile}
     image: grid-airflow
@@ -180,7 +162,6 @@ services:
     mem_limit: 2500m
     restart: unless-stopped
 
-  # ------------------------------------------------------------------- serving
   api:
     <<: *python-image
     command: ["uvicorn", "serving.api:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
@@ -196,7 +177,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ------------------------------------------------------------- observability
   prometheus:
     image: prom/prometheus:v2.55.1
     command:
@@ -220,7 +200,7 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_AUTH_ANONYMOUS_ENABLED: "true"        # read-only access without login, for the demo
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/grid_operations.json
       GRID_DB_USER: ${POSTGRES_USER:-grid}

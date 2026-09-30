@@ -1,5 +1,3 @@
-# Airflow image for the batch layer. It also carries PySpark, because the daily
-# billing job runs with spark-submit in local mode inside the Airflow worker.
 FROM apache/airflow:2.10.5-python3.11
 
 USER root
@@ -9,7 +7,6 @@ RUN apt-get update \
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 TZ=UTC PYTHONPATH=/opt/grid/src
 
 USER airflow
-# boto3 already ships with the image (Amazon provider); listed so the build fails loudly if not.
 RUN pip install --no-cache-dir pyspark==3.5.5 boto3
 
 ARG MAVEN=https://repo1.maven.org/maven2

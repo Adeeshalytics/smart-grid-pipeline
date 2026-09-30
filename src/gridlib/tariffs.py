@@ -1,9 +1,4 @@
-"""Validation of the daily tariff/billing reference file (the batch source).
-
-The file is produced by an external party, so it is treated as untrusted:
-every row is checked, bad rows are quarantined with a reason, and the load
-only proceeds if enough of the file is usable.
-"""
+"""Validation of the daily tariff/billing reference file (the batch source)."""
 from __future__ import annotations
 
 from typing import Any
@@ -13,7 +8,6 @@ from .config import BILLING_TIERS
 TARIFF_COLUMNS = ("household_id", "tariff_rate", "billing_tier", "subsidy_flag")
 MIN_TARIFF_RATE = 1.0
 MAX_TARIFF_RATE = 200.0
-# If more than this share of rows is rejected, the whole file is refused.
 MAX_REJECT_RATIO = 0.20
 
 _TRUE = {"true", "1", "yes", "y"}
@@ -49,11 +43,7 @@ def validate_tariff_row(row: dict[str, Any]) -> tuple[dict[str, Any] | None, str
 
 
 def validate_tariff_file(rows: list[dict[str, Any]]) -> tuple[list[dict], list[dict]]:
-    """Split a tariff file into clean rows and rejects.
-
-    Duplicate household rows are rejected after the first occurrence, so a
-    household can never be billed at two different rates for the same day.
-    """
+    """Split a tariff file into clean rows and rejects."""
     clean: list[dict] = []
     rejects: list[dict] = []
     seen: set[str] = set()

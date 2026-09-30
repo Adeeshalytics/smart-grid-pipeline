@@ -1,4 +1,3 @@
-# Lightweight image for the simulators, the init job and the serving API.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 PYTHONPATH=/opt/grid/src TZ=UTC

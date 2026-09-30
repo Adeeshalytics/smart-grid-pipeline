@@ -24,7 +24,6 @@ VALID = {
 }
 
 
-# ----------------------------------------------------------- reading contract
 def test_valid_reading_passes():
     assert schemas.validate_reading(VALID) is None
 
@@ -47,7 +46,6 @@ def test_non_object_payload_is_malformed():
     assert schemas.validate_reading("garbage") == schemas.REJECT_MALFORMED_JSON
 
 
-# ------------------------------------------------------------ stream simulator
 def test_fleet_is_deterministic_for_a_seed():
     settings = Settings()
     assert build_households(settings) == build_households(settings)
@@ -73,7 +71,7 @@ def test_corrupt_events_are_all_rejected():
         try:
             event = json.loads(payload)
         except json.JSONDecodeError:
-            continue  # truncated JSON: rejected as malformed by the pipeline
+            continue
         assert schemas.validate_reading(event) is not None
 
 
@@ -85,7 +83,6 @@ def test_no_solar_at_night_and_weather_is_reproducible():
     assert 0.05 <= cloud_factor("ZONE-EAST", day, 8203, 0.25) <= 1.0
 
 
-# ------------------------------------------------------------- simulated clock
 def test_clock_maps_five_minutes_to_one_day():
     anchor = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
     clock = SimClock(anchor, datetime(2026, 1, 1, tzinfo=timezone.utc), day_seconds=300)
@@ -103,7 +100,6 @@ def test_anchor_is_aligned_to_the_schedule():
     assert floor_to_day_boundary(wall, 300) == datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
 
 
-# ---------------------------------------------------------------- batch source
 def test_tariff_row_validation():
     good = {"household_id": "HH-0001", "tariff_rate": "30.5", "billing_tier": "tier_2", "subsidy_flag": "true"}
     clean, reason = validate_tariff_row(good)

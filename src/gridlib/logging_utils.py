@@ -1,9 +1,4 @@
-"""Structured (JSON) logging shared by every stage of the pipeline.
-
-Each line is one JSON object with a fixed envelope (ts, level, service, stage,
-event) plus free-form context fields, so logs from the simulators, Spark,
-Airflow and the API can be filtered and correlated the same way.
-"""
+"""Structured (JSON) logging shared by every stage of the pipeline."""
 from __future__ import annotations
 
 import json

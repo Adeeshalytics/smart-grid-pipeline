@@ -5,3 +5,7 @@ __pycache__/
 reports/*
 !reports/.gitkeep
 .venv/
+
+docs/
+tools/build_report.py
+tools/screenshots.mjs

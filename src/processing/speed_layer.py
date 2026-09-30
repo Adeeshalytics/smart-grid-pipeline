@@ -1,18 +1,4 @@
-"""Speed layer: Spark Structured Streaming over the meter.readings topic.
-
-One Spark application runs four independent streaming queries, each with its
-own checkpoint, so each can fail, restart and be monitored on its own:
-
-  dlq          rejected events        -> Kafka topic meter.readings.dlq
-  archive      valid raw events       -> Parquet in the data lake (master dataset)
-  zone_load    15-min windows by zone -> PostgreSQL rt_zone_load  (+ alerts)
-  household    running daily totals   -> PostgreSQL rt_household_today
-                                         joined with the latest tariff
-
-`archive` is the hand-over point to the batch layer: it stores every valid
-event, including duplicates and events that arrive too late for the windowed
-queries, so the batch layer can recompute exact results from the raw data.
-"""
+"""Speed layer: Spark Structured Streaming over the meter.readings topic."""
 from __future__ import annotations
 
 import json
@@ -33,7 +19,6 @@ from processing.spark_session import build_spark, jdbc_options
 log = get_logger("speed-layer", "processing")
 settings: Settings = get_settings()
 
-# ------------------------------------------------------------------ metrics
 INPUT_ROWS = Counter("speed_input_rows_total", "Rows read from Kafka", ["query"])
 INPUT_RATE = Gauge("speed_input_rows_per_second", "Arrival rate", ["query"])
 PROCESS_RATE = Gauge("speed_processed_rows_per_second", "Processing rate", ["query"])
@@ -89,8 +74,6 @@ class MetricsListener(StreamingQueryListener):
             )
 
     def onQueryIdle(self, event):
-        # Idle means "alive but no new data": keep the liveness timestamp fresh so
-        # a quiet topic is reported as missing data, not as a stalled query.
         name = self._names.get(str(event.id))
         if name:
             LAST_PROGRESS.labels(name).set(time.time())
@@ -100,7 +83,6 @@ class MetricsListener(StreamingQueryListener):
         log.error("query_terminated", query_id=str(event.id), exception=event.exception)
 
 
-# --------------------------------------------------------------- PostgreSQL sink
 _conn = None
 
 
@@ -123,7 +105,7 @@ def upsert(sink: str, sql: str, rows: list[tuple]) -> None:
         if _conn is not None:
             _conn.close()
         _conn = None
-        raise  # fail the micro-batch; Spark retries it from the checkpoint
+        raise
 
 
 ZONE_UPSERT = """
@@ -157,10 +139,6 @@ ON CONFLICT (sim_date, household_id) DO UPDATE SET
     updated_at       = now()
 """
 
-# Threshold alert: renewable contribution is "considerably low" when the hourly
-# average for a zone stays under the threshold during daylight hours. Only hours
-# whose four 15-minute windows are all closed are evaluated, so a half-filled
-# window cannot raise a false alarm. The unique key makes re-evaluation harmless.
 LOW_RENEWABLE_ALERT = """
 WITH closed AS (
     SELECT * FROM rt_zone_load
@@ -228,7 +206,6 @@ def raise_low_renewable_alerts(spark: SparkSession) -> None:
             "message": message,
         }
         messages.append((zone, json.dumps(payload)))
-    # Publish to Kafka too, so downstream systems (e.g. a control room) can subscribe.
     (
         spark.createDataFrame(messages, "key string, value string")
         .write.format("kafka")
@@ -238,7 +215,6 @@ def raise_low_renewable_alerts(spark: SparkSession) -> None:
     )
 
 
-# ------------------------------------------------------------ foreachBatch sinks
 def write_dlq(batch_df: DataFrame, batch_id: int) -> None:
     batch_df.persist()
     try:
@@ -294,8 +270,6 @@ def write_zone_load(batch_df: DataFrame, batch_id: int) -> None:
 
 def write_household_today(batch_df: DataFrame, batch_id: int) -> None:
     spark = batch_df.sparkSession
-    # Stream-static join: the tariff table is re-read every micro-batch, so a tariff
-    # file loaded by the batch layer is picked up by the speed layer within seconds.
     tariffs = (
         spark.read.format("jdbc")
         .options(**jdbc_options(settings), dbtable="v_latest_tariff")
@@ -324,7 +298,6 @@ def write_household_today(batch_df: DataFrame, batch_id: int) -> None:
         upsert("rt_household_today", HOUSEHOLD_UPSERT, rows)
 
 
-# --------------------------------------------------------------------- main
 def main() -> None:
     start_http_server(9103)
     spark = build_spark("grid-speed-layer", settings)
@@ -337,7 +310,7 @@ def main() -> None:
             .option("kafka.bootstrap.servers", settings.kafka_bootstrap)
             .option("subscribe", settings.topic_readings)
             .option("startingOffsets", "earliest")
-            .option("maxOffsetsPerTrigger", 50000)  # back-pressure after an outage
+            .option("maxOffsetsPerTrigger", 50000)
             .option("failOnDataLoss", "false")
             .load()
         )
@@ -347,7 +320,6 @@ def main() -> None:
 
     ckpt = settings.checkpoint_dir
 
-    # 1. Dead-letter queue: nothing invalid is silently dropped.
     (
         T.rejected_readings(checked())
         .writeStream.queryName("dlq")
@@ -357,7 +329,6 @@ def main() -> None:
         .start()
     )
 
-    # 2. Master dataset: append-only raw events, partitioned by simulated date.
     (
         T.valid_readings(checked())
         .coalesce(1)
@@ -371,7 +342,6 @@ def main() -> None:
         .start()
     )
 
-    # 3. Real-time grid load and renewable mix by zone.
     (
         T.zone_window_load(
             T.deduplicate(T.valid_readings(checked()), settings.watermark), settings.zone_window
@@ -384,7 +354,6 @@ def main() -> None:
         .start()
     )
 
-    # 4. Running daily totals per household, priced with the latest known tariff.
     (
         T.household_daily_totals(T.deduplicate(T.valid_readings(checked()), settings.watermark))
         .writeStream.queryName("household")
@@ -402,8 +371,6 @@ def main() -> None:
         watermark=settings.watermark,
         zone_window=settings.zone_window,
     )
-    # If any query dies, exit non-zero: Docker restarts the container and every
-    # query resumes from its checkpoint.
     spark.streams.awaitAnyTermination()
     QUERIES_ACTIVE.set(len(spark.streams.active))
     log.error("speed_layer_exiting", reason="a streaming query terminated")

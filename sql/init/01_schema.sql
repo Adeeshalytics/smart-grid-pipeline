@@ -1,12 +1,6 @@
--- Serving store for the smart-grid Lambda pipeline.
---
---   rt_*      real-time views, written by the speed layer (Spark Structured Streaming)
---   daily_*   batch views, written by the batch layer (Airflow + Spark)
---   the rest  reference data, lineage, alerts
 
 SET TIME ZONE 'UTC';
 
--- Shared simulated clock (see src/gridlib/simclock.py). Exactly one row.
 CREATE TABLE sim_clock (
     id          INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     anchor_wall TIMESTAMPTZ NOT NULL,
@@ -14,7 +8,6 @@ CREATE TABLE sim_clock (
     day_seconds INT NOT NULL
 );
 
--- ---------------------------------------------------------------- speed layer
 CREATE TABLE rt_zone_load (
     window_start     TIMESTAMPTZ NOT NULL,
     window_end       TIMESTAMPTZ NOT NULL,
@@ -41,12 +34,11 @@ CREATE TABLE rt_household_today (
     billing_tier     TEXT NOT NULL,
     subsidy_flag     BOOLEAN NOT NULL,
     tariff_source    TEXT NOT NULL,               -- latest_known | default
-    provisional_bill DOUBLE PRECISION NOT NULL,   -- estimate; the batch bill is authoritative
+    provisional_bill DOUBLE PRECISION NOT NULL,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (sim_date, household_id)
 );
 
--- ------------------------------------------------------------- reference data
 CREATE TABLE tariffs (
     dt              DATE NOT NULL,
     household_id    TEXT NOT NULL,
@@ -67,7 +59,6 @@ CREATE TABLE tariff_rejects (
     PRIMARY KEY (dt, line_no)
 );
 
--- ---------------------------------------------------------------- batch layer
 CREATE TABLE daily_household_bill (
     sim_date               DATE NOT NULL,
     household_id           TEXT NOT NULL,
@@ -82,19 +73,17 @@ CREATE TABLE daily_household_bill (
     tariff_rate            DOUBLE PRECISION NOT NULL,
     billing_tier           TEXT NOT NULL,
     subsidy_flag           BOOLEAN NOT NULL,
-    tariff_source          TEXT NOT NULL,          -- same_day | carried_forward | default
+    tariff_source          TEXT NOT NULL,
     energy_charge          DOUBLE PRECISION NOT NULL,
     subsidy_discount       DOUBLE PRECISION NOT NULL,
     export_credit          DOUBLE PRECISION NOT NULL,
     fixed_charge           DOUBLE PRECISION NOT NULL,
     total_bill             DOUBLE PRECISION NOT NULL,
-    pipeline_run_id        TEXT NOT NULL,          -- lineage: which DAG run produced the row
+    pipeline_run_id        TEXT NOT NULL,
     computed_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (sim_date, household_id)
 );
 
--- Spark bulk-loads here first; the rows are then swapped into daily_household_bill
--- in one transaction, so readers never see a half-written day.
 CREATE TABLE stg_daily_household_bill (LIKE daily_household_bill INCLUDING DEFAULTS);
 
 CREATE TABLE daily_zone_summary (
@@ -112,7 +101,6 @@ CREATE TABLE daily_zone_summary (
     PRIMARY KEY (sim_date, grid_zone)
 );
 
--- Speed layer vs batch layer for the same day: how far off was the real-time view?
 CREATE TABLE reconciliation (
     sim_date        DATE NOT NULL,
     grid_zone       TEXT NOT NULL,
@@ -136,8 +124,6 @@ CREATE TABLE daily_reports (
     generated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ------------------------------------------------------ alerts and lineage
--- Business alerts raised by the speed layer (e.g. low renewable contribution).
 CREATE TABLE grid_alerts (
     id           BIGSERIAL PRIMARY KEY,
     alert_type   TEXT NOT NULL,
@@ -151,7 +137,6 @@ CREATE TABLE grid_alerts (
     UNIQUE (alert_type, grid_zone, window_start)
 );
 
--- Operational alerts forwarded by Alertmanager (pipeline health).
 CREATE TABLE ops_alerts (
     id          BIGSERIAL PRIMARY KEY,
     alertname   TEXT NOT NULL,
@@ -163,7 +148,6 @@ CREATE TABLE ops_alerts (
     received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- One row per batch-layer task execution: the audit trail for the DAG.
 CREATE TABLE pipeline_runs (
     id          BIGSERIAL PRIMARY KEY,
     run_id      TEXT NOT NULL,
@@ -176,23 +160,18 @@ CREATE TABLE pipeline_runs (
 );
 CREATE INDEX pipeline_runs_date_idx ON pipeline_runs (sim_date, task);
 
--- ------------------------------------------------------------------- views
--- Dashboards plot against wall-clock time; this view maps each simulated
--- window back to the wall-clock instant at which it happened.
 CREATE VIEW v_rt_zone_load AS
 SELECT z.*,
        c.anchor_wall + (z.window_start - c.sim_epoch) * c.day_seconds / 86400.0 AS wall_time
 FROM rt_zone_load z
 CROSS JOIN sim_clock c;
 
--- Latest complete window per zone: the "right now" picture of the grid.
 CREATE VIEW v_grid_now AS
 SELECT DISTINCT ON (grid_zone) *
 FROM rt_zone_load
 WHERE window_end <= (SELECT max(window_start) FROM rt_zone_load)
 ORDER BY grid_zone, window_start DESC;
 
--- Latest known tariff per household (used for provisional bills).
 CREATE VIEW v_latest_tariff AS
 SELECT DISTINCT ON (household_id) household_id, tariff_rate, billing_tier, subsidy_flag, dt
 FROM tariffs

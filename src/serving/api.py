@@ -1,22 +1,4 @@
-"""Serving layer: REST API over the real-time and batch views.
-
-Real-time (speed layer):
-    GET /api/v1/grid/realtime                 current load and renewable mix by zone
-    GET /api/v1/grid/zones/{zone}/history     recent windows for one zone
-    GET /api/v1/households/{id}/today         running usage and provisional bill
-Batch (batch layer):
-    GET /api/v1/billing/{sim_date}            consolidated daily billing report
-    GET /api/v1/billing/{sim_date}/households/{id}
-    GET /api/v1/reports/latest                latest published report (HTML)
-    GET /api/v1/reconciliation/{sim_date}     speed layer vs batch layer
-Merged view (what Lambda's serving layer is for):
-    GET /api/v1/households/{id}/bill-to-date  batch bills for closed days + today's estimate
-Observability:
-    GET /health     liveness + data freshness
-    GET /metrics    Prometheus metrics
-    GET /api/v1/alerts
-    POST /internal/alertmanager               webhook receiver for operational alerts
-"""
+"""Serving layer: REST API over the real-time and batch views."""
 from __future__ import annotations
 
 import json
@@ -42,7 +24,6 @@ app = FastAPI(title="Smart Grid Serving API", version="1.0.0")
 REQUESTS = Counter("api_requests_total", "HTTP requests", ["path", "status"])
 LATENCY = Histogram("api_request_seconds", "HTTP request latency", ["path"])
 
-# Treat the real-time view as stale if no window was updated for this long (wall-clock).
 STALE_AFTER_SECONDS = 60
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
@@ -51,7 +32,7 @@ _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 def pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
     if _pool is None:
-        db.connect(settings).close()  # wait until PostgreSQL accepts connections
+        db.connect(settings).close()
         _pool = psycopg2.pool.ThreadedConnectionPool(1, 8, settings.pg_dsn, options="-c timezone=UTC")
     return _pool
 
@@ -71,7 +52,6 @@ def query(sql: str, params=None) -> list[dict]:
         return db.fetch_all(conn, sql, params)
 
 
-# ------------------------------------------------------------- observability
 @app.middleware("http")
 async def access_log(request: Request, call_next):
     """One structured log line and one metric sample per request, with a trace id."""
@@ -85,7 +65,7 @@ async def access_log(request: Request, call_next):
         REQUESTS.labels(request.url.path, "500").inc()
         raise
     route = request.scope.get("route") or route
-    path = getattr(route, "path", request.url.path)  # templated path keeps label cardinality low
+    path = getattr(route, "path", request.url.path)
     elapsed = time.perf_counter() - started
     REQUESTS.labels(path, str(response.status_code)).inc()
     LATENCY.labels(path).observe(elapsed)
@@ -103,11 +83,7 @@ async def access_log(request: Request, call_next):
 
 
 class PipelineCollector:
-    """Exports the state of the serving store as Prometheus gauges at scrape time.
-
-    These are the metrics the alert rules are written against: they describe
-    whether the *data* is fresh and correct, not merely whether processes are up.
-    """
+    """Exports the state of the serving store as Prometheus gauges at scrape time."""
 
     def collect(self):
         try:
@@ -116,7 +92,6 @@ class PipelineCollector:
                 """SELECT extract(epoch FROM now() - max(updated_at)) AS age FROM rt_zone_load"""
             )[0]["age"]
             batch = query(
-                # Before the first report exists, measure from the moment the pipeline started.
                 """SELECT extract(epoch FROM now() - COALESCE(max(generated_at),
                                                              (SELECT anchor_wall FROM sim_clock))) AS age,
                           count(*) AS n
@@ -132,7 +107,7 @@ class PipelineCollector:
             alerts = query(
                 "SELECT count(*) AS n FROM grid_alerts WHERE created_at > now() - INTERVAL '5 minutes'"
             )[0]["n"]
-        except Exception:  # noqa: BLE001 - never break the scrape
+        except Exception:  # noqa: BLE001
             log.exception("metrics_collection_failed")
             up = GaugeMetricFamily("grid_serving_store_up", "1 if the serving store answered")
             up.add_metric([], 0)
@@ -207,7 +182,6 @@ def health(response: Response) -> dict:
     }
 
 
-# ------------------------------------------------------------------ real-time
 @app.get("/api/v1/grid/realtime")
 def grid_realtime() -> dict:
     """Current grid load and renewable mix by zone (latest closed 15-minute window)."""
@@ -294,7 +268,6 @@ def bill_to_date(household_id: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------- batch
 @app.get("/api/v1/billing/{sim_date}")
 def billing_report(sim_date: date) -> dict:
     """Consolidated daily billing and solar-contribution report."""
@@ -354,7 +327,6 @@ def latest_report() -> HTMLResponse:
     return HTMLResponse(body)
 
 
-# --------------------------------------------------------------------- alerts
 @app.get("/api/v1/alerts")
 def alerts(limit: int = 50) -> dict:
     limit = min(max(limit, 1), 500)

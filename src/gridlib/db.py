@@ -15,7 +15,6 @@ def connect(settings: Settings, retries: int = 30, delay: float = 2.0):
     for _ in range(retries):
         try:
             conn = psycopg2.connect(settings.pg_dsn)
-            # Session in UTC so timestamptz values round-trip identically everywhere.
             with conn.cursor() as cur:
                 cur.execute("SET TIME ZONE 'UTC'")
             conn.commit()

@@ -1,9 +1,4 @@
-"""Event contract for smart-meter readings, and the validation rules.
-
-The limits below are the single source of truth: the Spark transformations in
-`processing/transforms.py` build their column expressions from these constants,
-and the pure-Python `validate_reading` is what the unit tests exercise.
-"""
+"""Event contract for smart-meter readings, and the validation rules."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -23,10 +18,8 @@ REQUIRED_FIELDS = (
     "timestamp",
 )
 
-# A household meter cannot plausibly record more than this in one 15-minute interval.
 MAX_KWH_PER_READING = 10.0
 
-# Reject reasons (also the values stored in the dead-letter topic).
 REJECT_MALFORMED_JSON = "malformed_json"
 REJECT_MISSING_FIELD = "missing_field"
 REJECT_BAD_TIMESTAMP = "bad_timestamp"

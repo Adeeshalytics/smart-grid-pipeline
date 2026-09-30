@@ -110,8 +110,8 @@ def test_tariff_is_carried_forward_or_defaulted_when_missing(spark):
         [
             (date(2026, 1, 1), "HH-0001", 30.0, "TIER_1", False),
             (date(2026, 1, 2), "HH-0001", 33.0, "TIER_1", False),
-            (date(2026, 1, 1), "HH-0002", 40.0, "TIER_3", True),  # absent from the file of Jan 2
-            (date(2026, 1, 3), "HH-0001", 99.0, "TIER_1", False),  # future tariff must be ignored
+            (date(2026, 1, 1), "HH-0002", 40.0, "TIER_3", True),
+            (date(2026, 1, 3), "HH-0001", 99.0, "TIER_1", False),
         ],
         "dt date, household_id string, tariff_rate double, billing_tier string, subsidy_flag boolean",
     )

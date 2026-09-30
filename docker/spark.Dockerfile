@@ -1,4 +1,3 @@
-# Spark image for the speed layer (Structured Streaming) and for running the tests.
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 PYTHONPATH=/opt/grid/src TZ=UTC \
@@ -11,8 +10,6 @@ RUN apt-get update \
 COPY requirements/spark.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Connector jars are baked into the image so start-up needs no internet access:
-# Kafka source/sink, S3A (object store) and the PostgreSQL JDBC driver.
 ARG MAVEN=https://repo1.maven.org/maven2
 RUN set -eux; \
     JARS="$(python -c 'import pyspark, os; print(os.path.join(os.path.dirname(pyspark.__file__), "jars"))')"; \

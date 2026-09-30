@@ -1,17 +1,4 @@
-"""Batch layer orchestration: one run per simulated day.
-
-    resolve_sim_date
-        |-- wait_for_tariff_file --> load_tariffs --|
-        |-- wait_for_late_readings -----------------|--> compute_daily_billing (Spark)
-                                                          --> reconcile --> quality_gate --> publish_report
-
-One simulated day lasts SIM_DAY_SECONDS of wall-clock time (300 s by default),
-so the DAG is scheduled every 5 minutes; each run fires at simulated midnight
-and bills the day that has just ended.
-
-Reprocess any earlier day by triggering manually with {"sim_date": "YYYY-MM-DD"}.
-Every task is idempotent, so a rerun replaces that day's results.
-"""
+"""Batch layer orchestration: one run per simulated day."""
 from __future__ import annotations
 
 import os
@@ -57,7 +44,6 @@ def grid_daily_billing():
         try:
             return tasks.resolve_sim_date(data_interval_end, params.get("sim_date"))
         except tasks.NoCompletedDay as exc:
-            # The very first run after start-up has nothing to bill: skip, do not fail.
             raise AirflowSkipException(str(exc)) from exc
 
     @task.sensor(poke_interval=5, timeout=180, mode="poke")
@@ -88,8 +74,6 @@ def grid_daily_billing():
     tariffs_loaded = load_tariffs(sim_date)
     wait_for_tariff_file(sim_date) >> tariffs_loaded
 
-    # Spark in local mode inside the Airflow worker. On a cluster this becomes a
-    # SparkSubmitOperator pointing at YARN/Kubernetes; the job itself is unchanged.
     compute = BashOperator(
         task_id="compute_daily_billing",
         bash_command=(
@@ -99,7 +83,7 @@ def grid_daily_billing():
             "--sim-date '{{ ti.xcom_pull(task_ids=\"resolve_sim_date\") }}' "
             "--run-id '{{ run_id }}'"
         ),
-        do_xcom_push=True,  # last stdout line = JSON summary of the job
+        do_xcom_push=True,
     )
 
     reconciled = reconcile(sim_date)

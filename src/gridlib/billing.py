@@ -1,18 +1,4 @@
-"""Billing rules - the business logic that turns energy into money.
-
-Rules (per household, per day):
-  net_kwh         = consumption - solar generation
-  import_kwh      = energy drawn from the grid      = max(net_kwh, 0)
-  export_kwh      = surplus solar fed to the grid   = max(-net_kwh, 0)
-  energy_charge   = import_kwh * tariff_rate * tier multiplier
-  subsidy_discount= SUBSIDY_DISCOUNT * energy_charge   (only if subsidy_flag)
-  export_credit   = export_kwh * tariff_rate * FEED_IN_FACTOR
-  total_bill      = energy_charge - subsidy_discount - export_credit + fixed charge
-
-`compute_bill` is the reference implementation. The Spark version in
-`processing/transforms.py` is built from the same constants, and a test checks
-that the two agree row by row.
-"""
+"""Billing rules - the business logic that turns energy into money."""
 from __future__ import annotations
 
 TIER_MULTIPLIER = {"TIER_1": 1.00, "TIER_2": 1.25, "TIER_3": 1.60}

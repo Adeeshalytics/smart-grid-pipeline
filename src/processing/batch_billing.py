@@ -1,15 +1,4 @@
-"""Batch layer: recompute one simulated day of billing from the raw master dataset.
-
-    spark-submit batch_billing.py --sim-date 2026-01-03 --run-id <airflow run id>
-
-Reads every raw reading for the day from the data lake, removes duplicates
-exactly, totals each household, joins the day's tariff data and applies the
-billing rules. The output replaces whatever was stored for that day, so the job
-is idempotent: running it twice, or re-running it after a late tariff
-correction, gives the same correct result.
-
-The last line printed to stdout is a JSON summary, which Airflow stores in XCom.
-"""
+"""Batch layer: recompute one simulated day of billing from the raw master dataset."""
 from __future__ import annotations
 
 import argparse
@@ -50,7 +39,6 @@ BILL_COLUMNS = [
     "pipeline_run_id",
 ]
 
-# Atomic swap: delete the day and insert the new rows in a single transaction.
 SWAP_SQL = f"""
 DELETE FROM daily_household_bill WHERE sim_date = %(d)s;
 INSERT INTO daily_household_bill ({", ".join(BILL_COLUMNS)})
@@ -81,7 +69,6 @@ def main() -> None:
     spark.sparkContext.setLogLevel("WARN")
     log.info("batch_started", sim_date=args.sim_date, run_id=args.run_id, source=settings.lake_raw_path)
 
-    # 1. Raw master dataset for the day (partition pruning on event_date).
     raw = spark.read.parquet(settings.lake_raw_path).where(
         F.col("event_date") == F.lit(args.sim_date).cast("date")
     )
@@ -90,14 +77,12 @@ def main() -> None:
     if raw_count == 0:
         raise SystemExit(f"No raw readings in the data lake for {args.sim_date}")
 
-    # 2. Exact de-duplication, then household totals - the same functions the speed layer uses.
     unique = T.deduplicate(raw)
     unique_count = unique.count()
     usage = T.household_daily_totals(unique).where(
         F.col("sim_date") == F.lit(args.sim_date).cast("date")
     )
 
-    # 3. Join with the batch source: the tariff data loaded for this day.
     tariffs = T.tariffs_as_of(
         spark.read.format("jdbc").options(**jdbc_options(settings), dbtable="tariffs").load(),
         args.sim_date,
@@ -109,7 +94,6 @@ def main() -> None:
         .cache()
     )
 
-    # 4a. Serving store: bulk-load a staging table, then swap atomically.
     (
         billed.write.format("jdbc")
         .options(**jdbc_options(settings), dbtable="stg_daily_household_bill", truncate="true")
@@ -121,7 +105,6 @@ def main() -> None:
         cur.execute(SWAP_SQL, {"d": args.sim_date, "run_id": args.run_id})
     conn.commit()
 
-    # 4b. Curated zone of the data lake: the same result as Parquet, for analytics.
     curated = f"{settings.lake_curated_path}/sim_date={args.sim_date}"
     billed.drop("sim_date").coalesce(1).write.mode("overwrite").parquet(curated)
 

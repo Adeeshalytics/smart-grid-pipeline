@@ -1,8 +1,4 @@
-"""The simulated population of households and the physical model behind readings.
-
-Both simulators build the same fleet from the same seed, so the tariff file
-always refers to households that the meter stream actually contains.
-"""
+"""The simulated population of households and the physical model behind readings."""
 from __future__ import annotations
 
 import math
@@ -19,8 +15,8 @@ class Household:
     household_id: str
     meter_id: str
     grid_zone: str
-    load_scale: float  # relative size of the household's demand
-    solar_kw_peak: float  # 0 if the household has no rooftop solar
+    load_scale: float
+    solar_kw_peak: float
     billing_tier: str
     subsidy_flag: bool
 
@@ -60,15 +56,11 @@ def demand_kwh(hour: float, load_scale: float, interval_hours: float) -> float:
 
 
 def cloud_factor(zone: str, day: date, seed: int, p_overcast: float) -> float:
-    """Share of clear-sky solar output a zone gets on a given day (0..1).
-
-    Deterministic per (zone, day), so a rerun or a second simulator instance
-    reproduces the same weather.
-    """
+    """Share of clear-sky solar output a zone gets on a given day (0..1)."""
     rng = random.Random(zlib.crc32(f"{seed}|{zone}|{day.isoformat()}".encode()))
     roll = rng.random()
     if roll < p_overcast:
-        return rng.uniform(0.05, 0.15)  # overcast: triggers low-renewable alerts
+        return rng.uniform(0.05, 0.15)
     if roll < p_overcast + 0.20:
         return rng.uniform(0.35, 0.60)  # partly cloudy
     return rng.uniform(0.75, 1.00)  # clear

@@ -1,9 +1,4 @@
-"""Daily consolidated billing and solar-contribution report.
-
-This is the batch layer's final deliverable: one HTML report (for people) and
-one CSV (for downstream systems) per simulated day, stored in the object store
-and copied to the local ./reports folder.
-"""
+"""Daily consolidated billing and solar-contribution report."""
 from __future__ import annotations
 
 import csv

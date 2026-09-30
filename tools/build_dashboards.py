@@ -1,8 +1,4 @@
-"""Generate the Grafana dashboards as JSON.
-
-Dashboards are code: edit this file, run `python tools/build_dashboards.py`, and
-commit the JSON it writes to observability/grafana/dashboards/.
-"""
+"""Generate the Grafana dashboards as JSON."""
 from __future__ import annotations
 
 import json

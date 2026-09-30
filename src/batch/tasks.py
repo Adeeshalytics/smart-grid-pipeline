@@ -1,9 +1,4 @@
-"""Task logic for the daily batch pipeline.
-
-The Airflow DAG (airflow/dags/grid_daily_billing.py) only wires these
-functions together. Keeping the logic here, free of Airflow imports, makes it
-importable and testable on its own.
-"""
+"""Task logic for the daily batch pipeline."""
 from __future__ import annotations
 
 import csv
@@ -22,10 +17,7 @@ from gridlib.tariffs import file_is_acceptable, validate_tariff_file
 
 log = get_logger("batch-pipeline", "processing")
 
-# Wall-clock seconds to wait after simulated midnight before billing the day, so
-# that late meter readings have reached the data lake.
 LATE_DATA_GRACE_SECONDS = 45
-# Fail the run if the speed layer and the batch layer disagree by more than this.
 MAX_RECONCILIATION_DIFF_PCT = 25.0
 WARN_RECONCILIATION_DIFF_PCT = 5.0
 
@@ -39,11 +31,7 @@ class NoCompletedDay(Exception):
 
 
 def resolve_sim_date(data_interval_end: datetime, override: str | None = None) -> str:
-    """Which simulated day does this run bill?
-
-    A scheduled run fires at simulated midnight and bills the day that just
-    ended. A manual run can pass `sim_date` to reprocess any earlier day.
-    """
+    """Which simulated day does this run bill?"""
     if override:
         return override
     settings = get_settings()
@@ -51,7 +39,7 @@ def resolve_sim_date(data_interval_end: datetime, override: str | None = None) -
     clock = load_clock(settings, conn)
     conn.close()
     elapsed = (data_interval_end - clock.anchor_wall).total_seconds()
-    index = int((elapsed + 1) // clock.day_seconds) - 1  # +1 s tolerance at the boundary
+    index = int((elapsed + 1) // clock.day_seconds) - 1
     if index < 0:
         raise NoCompletedDay("No simulated day has completed yet")
     return clock.sim_date(index).isoformat()
@@ -76,12 +64,7 @@ def late_data_grace_elapsed(sim_date: str) -> bool:
 
 
 def load_tariffs(sim_date: str, run_id: str) -> dict:
-    """Validate the day's tariff file and load it into the serving store.
-
-    Checks, in order: checksum against the manifest, row count against the
-    manifest, per-row validation, overall reject ratio. Rejected rows are
-    quarantined in `tariff_rejects`. The load is idempotent.
-    """
+    """Validate the day's tariff file and load it into the serving store."""
     started = time.time()
     settings = get_settings()
     s3c = s3.client(settings)
@@ -146,11 +129,7 @@ LEFT JOIN (SELECT grid_zone, sum(consumption_kwh) AS kwh, sum(readings) AS readi
 
 
 def reconcile(sim_date: str, run_id: str) -> dict:
-    """Compare the speed layer's view of the day with the batch layer's exact result.
-
-    The batch layer is the source of truth. The difference quantifies what the
-    real-time view missed (readings that arrived after the watermark).
-    """
+    """Compare the speed layer's view of the day with the batch layer's exact result."""
     started = time.time()
     settings = get_settings()
     conn = db.connect(settings)

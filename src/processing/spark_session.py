@@ -9,12 +9,9 @@ from gridlib.config import Settings
 def build_spark(app_name: str, settings: Settings) -> SparkSession:
     return (
         SparkSession.builder.appName(app_name)
-        # All event times are UTC; never depend on the container's locale.
         .config("spark.sql.session.timeZone", "UTC")
-        # Small data volume: the default of 200 shuffle partitions would only add overhead.
         .config("spark.sql.shuffle.partitions", "4")
         .config("spark.ui.showConsoleProgress", "false")
-        # S3-compatible object store (SeaweedFS) through the s3a connector.
         .config("spark.hadoop.fs.s3a.endpoint", settings.s3_endpoint)
         .config("spark.hadoop.fs.s3a.access.key", settings.s3_access_key)
         .config("spark.hadoop.fs.s3a.secret.key", settings.s3_secret_key)

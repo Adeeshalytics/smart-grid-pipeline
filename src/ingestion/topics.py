@@ -1,7 +1,4 @@
-"""Create the Kafka topics explicitly (auto-creation is disabled on the broker).
-
-Run once at start-up by the `topic-init` service. Idempotent.
-"""
+"""Create the Kafka topics explicitly (auto-creation is disabled on the broker)."""
 from __future__ import annotations
 
 import sys
@@ -24,21 +21,19 @@ def main() -> int:
         try:
             admin.list_topics(timeout=5)
             break
-        except Exception:  # noqa: BLE001 - broker still starting
+        except Exception:  # noqa: BLE001
             time.sleep(2)
     else:
         log.error("kafka_unreachable", bootstrap=settings.kafka_bootstrap)
         return 1
 
     wanted = [
-        # Keyed by meter_id: per-meter ordering, and load spread evenly over partitions.
         NewTopic(
             settings.topic_readings,
             num_partitions=settings.topic_partitions,
             replication_factor=1,
             config={"retention.ms": str(7 * 24 * 3600 * 1000), "cleanup.policy": "delete"},
         ),
-        # Rejected events are kept longer so they can be inspected and replayed.
         NewTopic(
             settings.topic_dlq,
             num_partitions=1,
